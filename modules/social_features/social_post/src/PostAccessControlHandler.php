@@ -32,8 +32,12 @@ class PostAccessControlHandler extends EntityAccessControlHandler {
             if (AccessResult::allowedIfHasPermission($account, 'view community posts')->isAllowed()) {
               // Check if the post has been posted in a group.
               $group_id = $entity->field_recipient_group->target_id;
-              if ($group_id) {
+
+              if (!is_null($group_id)) {
                 $group = entity_load('group', $group_id);
+              }
+
+              if (!empty($group)) {
                 if ($group->hasPermission('access posts in group', $account) && $this->checkDefaultAccess($entity, $operation, $account)) {
                   return AccessResult::allowed();
                 }
