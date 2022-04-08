@@ -34,24 +34,11 @@ mergeable:
         add: 'blocked: drupal.org ticket'
       - do: checks # default fail case
         status: 'failure' # Can be: success, failure, neutral, cancelled, timed_out, or action_required
-        payload:
-          title: 'Mergeable Run have been Completed!'
-          summary: |
-            ### Status: {{toUpperCase validationStatus}}
-                 Here are some stats of the run:
-                 {{validationCount}} validations were ran.
-                 {{passCount}} PASSED
-                 {{failCount}} FAILED
-          text: "{{#each validationSuites}}\n
-                #### {{{statusIcon status}}} Validator: {{toUpperCase name}}\n
-                {{#each validations }} * {{{statusIcon status}}} ***{{{ description }}}***\n
-                       Input : {{{details.input}}}\n
-                       Settings : {{{displaySettings details.settings}}}\n
-                       {{/each}}\n
-                {{/each}}"
     pass:
       - do: labels
         remove: 'blocked: drupal.org ticket'
+      - do: checks # default fail case
+        status: 'success'
 
   - when: pull_request.*
     name: "Valid milestone"
@@ -66,3 +53,25 @@ mergeable:
             A milestone would be super lovely, this way we can map it against a correct release but also be aware
             of where to cherry-pick. Don't worry if you're unsure what milestone to pick, our maintainers will be
             able to assist you with that.
+
+  - when: pull_request.*
+    name: "Check commit messages"
+    validate:
+      - do: commit message
+        message:
+          regex: '^(coding standards|chore|fix|refactor|test|style|perf)(\(\w+\))?:.+$'
+          skip_merge: true
+    fail:
+      - do: comment
+        payload:
+          body: >
+            It would be great if you could create helpful commit messages, maybe a rebase would work before putting it up for review? ;)
+      - do: labels
+        add: 'blocked: commit cleanup'
+      - do: checks # default fail case
+        status: 'failure'
+    pass:
+      - do: labels
+        remove: 'blocked: commit cleanup'
+      - do: checks # default fail case
+        status: 'success'
