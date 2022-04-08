@@ -29,7 +29,6 @@ mergeable:
               - begin with a reference to a Drupal.org issue number in the format of "Issue #issuenumber"
               - begin with Internal: if it's related to an internal ticket
               - begin with Updates: if we are updating one of our dependencies
-          leave_old_comment: true
       - do: labels
         add: 'blocked: drupal.org ticket'
       - do: checks # default fail case
