@@ -1,37 +1,26 @@
 version: 2
 mergeable:
   - when: pull_request.opened # New contributor.
+    name: "Hola"
+    validate: []
     filter:
       - do: author
         must_exclude:
           regex: 'dependabot'
-    validate: []
     pass:
       - do: comment
         payload:
           body: >
             Thanks for contributing towards Open Social! A maintainer from @goalgorilla/maintainers will review your changes shortly. Please don't be discouraged if it takes a while.
             In the meantime, we have some automated checks running and it might be that you will see me comment with some tips or requests to speed up the review process. :blush:
+        leave_old_comment: true
 
   - when: pull_request.*
     name: "Valid issue title"
     validate:
-      - do: and
-        validate:
-          - do: title
-            must_include:
-              regex:
-                - "^Issue #"
-                - "^Internal"
-                - "^Updates:"
-          - do: description
-            no_empty:
-              enabled: false # Cannot be empty when true.
-            must_include:
-              regex:
-                - "^Issue #"
-                - "^Internal"
-                - "^Updates:"
+      - do: title
+        begins_with:
+          match: ['AUTH', 'SOCIAL', 'CORE']
     fail:
       - do: comment
         payload:
@@ -42,9 +31,13 @@ mergeable:
               - begin with Updates: if we are updating one of our dependencies
       - do: labels
         add: 'blocked: drupal.org ticket'
+      - do: checks # default fail case
+        status: 'failure' # Can be: success, failure, neutral, cancelled, timed_out, or action_required
     pass:
       - do: labels
         remove: 'blocked: drupal.org ticket'
+      - do: checks # default fail case
+        status: 'success'
 
   - when: pull_request.*
     name: "Valid milestone"
@@ -59,3 +52,25 @@ mergeable:
             A milestone would be super lovely, this way we can map it against a correct release but also be aware
             of where to cherry-pick. Don't worry if you're unsure what milestone to pick, our maintainers will be
             able to assist you with that.
+
+  - when: pull_request.*
+    name: "Check commit messages"
+    validate:
+      - do: commit message
+        message:
+          regex: '^(coding standards|chore|fix|refactor|test|style|perf)(\(\w+\))?:.+$'
+          skip_merge: true
+    fail:
+      - do: comment
+        payload:
+          body: >
+            It would be great if you could create helpful commit messages, maybe a rebase would work before putting it up for review? ;)
+      - do: labels
+        add: 'blocked: commit cleanup'
+      - do: checks # default fail case
+        status: 'failure'
+    pass:
+      - do: labels
+        remove: 'blocked: commit cleanup'
+      - do: checks # default fail case
+        status: 'success'
