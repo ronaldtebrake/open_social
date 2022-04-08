@@ -35,7 +35,7 @@ We are testing [Tugboat](https://www.tugboat.qa/) to achieve the following:
 
 1. Create a live preview of every PR with the changes reflected
 2. Use this live preview to run Behat tests on
-3. Use this live preview to run Cypress tests on
+3. Use this live preview to run Cypress tests on 
 
 ## GitHub actions
 We use github actions to trigger
