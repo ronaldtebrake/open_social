@@ -1,11 +1,12 @@
 version: 2
 mergeable:
   - when: pull_request.opened # New contributor.
+    name: "Hola"
+    validate: []
     filter:
       - do: author
         must_exclude:
           regex: 'dependabot'
-    validate: []
     pass:
       - do: comment
         payload:
@@ -17,22 +18,9 @@ mergeable:
   - when: pull_request.*
     name: "Valid issue title"
     validate:
-      - do: and
-        validate:
-          - do: title
-            must_include:
-              regex:
-                - "^Issue #"
-                - "^Internal"
-                - "^Updates:"
-          - do: description
-            no_empty:
-              enabled: true # Cannot be empty when true.
-            must_include:
-              regex:
-                - "^Issue #"
-                - "^Internal"
-                - "^Updates:"
+      - do: title
+        begins_with:
+          match: ['AUTH', 'SOCIAL', 'CORE']
     fail:
       - do: comment
         payload:
@@ -44,6 +32,23 @@ mergeable:
           leave_old_comment: true
       - do: labels
         add: 'blocked: drupal.org ticket'
+      - do: checks # default fail case
+        status: 'failure' # Can be: success, failure, neutral, cancelled, timed_out, or action_required
+        payload:
+          title: 'Mergeable Run have been Completed!'
+          summary: |
+            ### Status: {{toUpperCase validationStatus}}
+                 Here are some stats of the run:
+                 {{validationCount}} validations were ran.
+                 {{passCount}} PASSED
+                 {{failCount}} FAILED
+          text: "{{#each validationSuites}}\n
+                #### {{{statusIcon status}}} Validator: {{toUpperCase name}}\n
+                {{#each validations }} * {{{statusIcon status}}} ***{{{ description }}}***\n
+                       Input : {{{details.input}}}\n
+                       Settings : {{{displaySettings details.settings}}}\n
+                       {{/each}}\n
+                {{/each}}"
     pass:
       - do: labels
         remove: 'blocked: drupal.org ticket'
