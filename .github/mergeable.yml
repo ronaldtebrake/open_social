@@ -56,7 +56,7 @@ mergeable:
   - when: pull_request.*
     name: "Check commit messages"
     validate:
-      - do: commit message
+      - do: commit
         message:
           regex: '^(coding standards|chore|fix|refactor|test|style|perf)(\(\w+\))?:.+$'
           skip_merge: true
