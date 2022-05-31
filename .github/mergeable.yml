@@ -208,31 +208,29 @@ mergeable:
     name: 'Check backport'
     type: pull_request
     filter:
-      and:
-        - do: payload
-          pull_request:
-            merged:
-              boolean:
-                match: true
-        - do: payload
-          pull_request:
-            labels:
-              must_include:
-                regex: 'status: needs backport'
-                key: 'name'
+      - do: payload
+        pull_request:
+          merged:
+            boolean:
+              match: true
+      - do: payload
+        pull_request:
+          labels:
+            must_include:
+              regex: 'status: needs backport'
+              key: 'name'
     validate:
-      and:
-        - do: stale
-          days: 1
-          type: pull_request
-          time_constraint:
-            time_zone: 'Europe/Amsterdamn'
-            hours_between: [ '9', '17' ]
-            days_of_week: [ 'Mon', 'Tue', 'Wed', 'Thu', 'Fri' ]
-        - do: label
-          must_include:
-            regex: 'verified-cherry-picks'
-            message: 'Cherry pick flag is required'
+      - do: stale
+        days: 1
+        type: pull_request
+        time_constraint:
+          time_zone: 'Europe/Amsterdamn'
+          hours_between: [ '9', '17' ]
+          days_of_week: [ 'Mon', 'Tue', 'Wed', 'Thu', 'Fri' ]
+      - do: label
+        must_include:
+          regex: 'verified-cherry-picks'
+          message: 'Cherry pick flag is required'
     fail:
       - do: comment
         payload:
