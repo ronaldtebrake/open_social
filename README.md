@@ -4,8 +4,7 @@
 
 # Open Social
 The install profile for the
-<a target="_blank" href="http://www.drupal.org/project/social">Open Social
-distribution</a>.
+<a target="_blank" href="http://www.drupal.org/project/social">Open Social distribution</a>.
 
 # Quick installation?
 We have a template available at
