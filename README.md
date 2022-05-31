@@ -3,7 +3,7 @@
 [![Twitter Follow](https://img.shields.io/twitter/follow/OpenSocialHQ.svg)](https://twitter.com/OpenSocialHQ)
 
 # Open Social
-The install profile for the
+The install profile for the 
 <a target="_blank" href="http://www.drupal.org/project/social">Open Social
 distribution</a>.
 
