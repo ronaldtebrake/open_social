@@ -17,6 +17,12 @@ use Drupal\Core\Entity\EntityInterface;
 use Drupal\Core\Entity\Display\EntityViewDisplayInterface;
 use Drupal\activity_creator\Entity\Activity;
 use Drupal\search_api\Task\TaskInterface;
+use Symfony\Component\EventDispatcher\EventSubscriberInterface;
+use Drupal\hux\Event\EntityEvent;
+use Drupal\hux\Event\ViewsDataEvent;
+use Drupal\hux\Event\ThemeEvent;
+use Drupal\hux\Event\ThemeSuggestionsEvent;
+use Drupal\hux\Event\CronEvent;
 
 /**
  * Activity statuses.
@@ -310,57 +316,6 @@ function activity_creator_entity_delete(EntityInterface $entity) {
 }
 
 /**
- * Update and or delete activities for given entity.
- *
- * @param string $action
- *   A string containing the action. Can be delete or update.
- * @param \Drupal\Core\Entity\EntityInterface $entity
- *   The entity object which is updated or deleted.
- *
- * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
- * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
- * @throws \Drupal\Core\Entity\EntityStorageException
- */
-function _activity_creator_activity_for_entity_updater($action, EntityInterface $entity) {
-  if ($entity !== NULL) {
-    // We never create activities for configuration entities but accessing
-    // entity queries during configuration changes may cause errors.
-    if ($entity instanceof ConfigEntityInterface) {
-      return;
-    }
-
-    // Ignore Task entity from search api module.
-    if (\Drupal::moduleHandler()->moduleExists('search_api') && $entity instanceof TaskInterface) {
-      return;
-    }
-
-    /** @var \Drupal\activity_creator\ActivityNotifications $activity_notification_service */
-    $activity_notification_service = \Drupal::service('activity_creator.activity_notifications');
-    $ids = $activity_notification_service->getActivityIdsByEntity($entity);
-    if (empty($ids)) {
-      return;
-    }
-
-    if ($action === 'update') {
-      $tags = [];
-      foreach ($ids as $id) {
-        $tags[] = 'activity:' . $id;
-      }
-      Cache::invalidateTags($tags);
-    }
-    elseif ($action === 'delete') {
-      // Delete all activities.
-      $activity_storage = \Drupal::entityTypeManager()->getStorage('activity');
-      $activities = $activity_storage->loadMultiple($ids);
-      $activity_storage->delete($activities);
-
-      // Remove entries from activity_notification_table.
-      $activity_notification_service->deleteNotificationsbyIds($ids);
-    }
-  }
-}
-
-/**
  * Implements hook_cron().
  */
 function activity_creator_cron() {
@@ -369,63 +324,95 @@ function activity_creator_cron() {
 }
 
 /**
- * Function that empties the activity queues.
+ * Event subscriber for Activity Creator module.
  */
-function activity_creator_empty_queue() {
-  // Activity queues.
-  $queues = [
-    'activity_creator_activities',
-    'activity_creator_logger',
-    'activity_logger_message',
-    'activity_send_email_worker',
-  ];
+class ActivityCreatorSubscriber implements EventSubscriberInterface {
 
-  // The workermanager.
-  $workerManager = \Drupal::service('plugin.manager.queue_worker');
-
-  /** @var Drupal\Core\Queue\QueueFactory $queue */
-  $queue = \Drupal::service('queue');
-
-  for ($i = 0; $i < 5; $i++) {
-    foreach ($workerManager->getDefinitions() as $name => $info) {
-      if (in_array($name, $queues)) {
-        /** @var Drupal\Core\Queue\QueueInterface $worker */
-        $worker = $queue->get($name);
-        /** @var \Drupal\Core\Queue\QueueWorkerInterface $queue_worker */
-        $queue_worker = $workerManager->createInstance($name);
-        // Must contain items.
-        if ($worker->numberOfItems() > 0) {
-          while ($item = $worker->claimItem()) {
-            $queue_worker->processItem($item->data);
-            $worker->deleteItem($item);
-          }
-        }
-      }
+  /**
+   * Handles entity insert events.
+   */
+  public function onEntityInsert(EntityEvent $event) {
+    $entity = $event->getEntity();
+    if ($entity instanceof Message) {
+      activity_creator_message_insert($entity);
+    }
+    elseif ($entity instanceof ActivityInterface) {
+      activity_creator_activity_insert($entity);
     }
   }
-}
 
-/**
- * Set the view mode for the activity entity reference for an entity type.
- *
- * Provides no validation on the validity of the entity type id or the view mode
- * id.
- *
- * @param string $entity_type_id
- *   The entity type for which to change the view mode.
- * @param string $view_mode_id
- *   The view mode to use in the activity entity reference field.
- */
-function activity_creator_set_entity_view_mode(string $entity_type_id, string $view_mode_id) {
-  /** @var \Drupal\Core\Entity\Display\EntityViewDisplayInterface $activity_display */
-  $activity_display = \Drupal::service('entity_type.manager')
-    ->getStorage('entity_view_display')
-    ->load('activity.activity.default');
-  $field = $activity_display->getComponent('field_activity_entity');
+  /**
+   * Handles entity update events.
+   */
+  public function onEntityUpdate(EntityEvent $event) {
+    $entity = $event->getEntity();
+    activity_creator_entity_update($entity);
+  }
 
-  $field['settings'][$entity_type_id]['view_mode'] = $view_mode_id;
+  /**
+   * Handles entity delete events.
+   */
+  public function onEntityDelete(EntityEvent $event) {
+    $entity = $event->getEntity();
+    activity_creator_entity_delete($entity);
+  }
 
-  $activity_display
-    ->setComponent('field_activity_entity', $field)
-    ->save();
+  /**
+   * Handles views data events.
+   */
+  public function onViewsData(ViewsDataEvent $event) {
+    $data = activity_creator_views_data();
+    $event->setData($data);
+  }
+
+  /**
+   * Handles theme events.
+   */
+  public function onTheme(ThemeEvent $event) {
+    $theme = activity_creator_theme();
+    $event->setTheme($theme);
+  }
+
+  /**
+   * Handles theme suggestions events.
+   */
+  public function onThemeSuggestions(ThemeSuggestionsEvent $event) {
+    $suggestions = activity_creator_theme_suggestions_activity($event->getVariables());
+    $event->setSuggestions($suggestions);
+  }
+
+  /**
+   * Handles entity view events.
+   */
+  public function onEntityView(EntityEvent $event) {
+    $build = &$event->getBuild();
+    $entity = $event->getEntity();
+    $display = $event->getDisplay();
+    $view_mode = $event->getViewMode();
+    activity_creator_entity_view($build, $entity, $display, $view_mode);
+  }
+
+  /**
+   * Handles cron events.
+   */
+  public function onCron(CronEvent $event) {
+    activity_creator_cron();
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public static function getSubscribedEvents() {
+    return [
+      EntityEvent::INSERT => 'onEntityInsert',
+      EntityEvent::UPDATE => 'onEntityUpdate',
+      EntityEvent::DELETE => 'onEntityDelete',
+      ViewsDataEvent::DATA => 'onViewsData',
+      ThemeEvent::THEME => 'onTheme',
+      ThemeSuggestionsEvent::SUGGESTIONS => 'onThemeSuggestions',
+      EntityEvent::VIEW => 'onEntityView',
+      CronEvent::CRON => 'onCron',
+    ];
+  }
+
 }

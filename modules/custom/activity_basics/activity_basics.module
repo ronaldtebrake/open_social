@@ -9,72 +9,33 @@ use Drupal\Core\Entity\EntityInterface;
 use Drupal\Core\Entity\EntityPublishedInterface;
 use Drupal\node\NodeInterface;
 use Drupal\group\Entity\GroupContent;
+use Drupal\hux\Event\EntityEvent;
+use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 
 /**
  * Implements hook_entity_insert().
  */
 function activity_basics_entity_insert(EntityInterface $entity): void {
-  _activity_basics_entity_action($entity, 'create_entitiy_action');
-
-  // Check if the entity created with "published" status.
-  if ($entity instanceof EntityPublishedInterface) {
-    if ($entity->isPublished()) {
-      _activity_basics_entity_action($entity, 'publish_entity_action');
-    }
-  }
+  \Drupal::service('event_dispatcher')->dispatch(new EntityEvent($entity), EntityEvent::INSERT);
 }
 
 /**
  * Implements hook_entity_update().
  */
 function activity_basics_entity_update(EntityInterface $entity): void {
-  _activity_basics_entity_action($entity, 'update_entity_action');
+  \Drupal::service('event_dispatcher')->dispatch(new EntityEvent($entity), EntityEvent::UPDATE);
 }
 
 /**
  * Implements hook_entity_presave().
  */
 function activity_basics_entity_presave(EntityInterface $entity): void {
-  // Check if the entity become published.
-  if ($entity instanceof EntityPublishedInterface && !$entity->isNew()) {
-    // Check if entity change state from "unpublished" to "published".
-    // @phpstan-ignore-next-line
-    $original = $entity->original;
-    if (!$original->isPublished() && $entity->isPublished()) {
-      _activity_basics_entity_action($entity, 'publish_entity_action');
-    }
-  }
+  \Drupal::service('event_dispatcher')->dispatch(new EntityEvent($entity), EntityEvent::PRESAVE);
 }
 
 /**
  * Implements hook_social_group_move().
  */
 function activity_basics_social_group_move(NodeInterface $node): void {
-  $node->setCreatedTime($node->getChangedTime());
-
-  // If the node is placed within a new group, we add the move_entity_action
-  // activity.
-  $group_contents = GroupContent::loadByEntity($node);
-  if (!empty($group_contents)) {
-    _activity_basics_entity_action($node, 'move_entity_action');
-  }
-  // If the node is placed from a group in to the community, we add the
-  // create_node-bundle_community activity.
-  if (empty($group_contents)) {
-    _activity_basics_entity_action($node, 'create_entitiy_action');
-  }
-}
-
-/**
- * Create or modify some entity.
- *
- * @param \Drupal\Core\Entity\EntityInterface $entity
- *   The entity.
- * @param string $instance
- *   The instance.
- */
-function _activity_basics_entity_action(EntityInterface $entity, $instance): void {
-  \Drupal::service('plugin.manager.activity_action.processor')
-    ->createInstance($instance)
-    ->create($entity);
+  \Drupal::service('event_dispatcher')->dispatch(new EntityEvent($node), 'social_group_move');
 }
