@@ -1,0 +1,51 @@
+<?php
+
+/**
+ * @file
+ * Install, update and uninstall functions for the animals module.
+ */
+
+/**
+ * Implements hook_install().
+ */
+function animals_install() {
+  // Create the animal entity type.
+  animals_create_animal_entity_type();
+}
+
+/**
+ * Implements hook_uninstall().
+ */
+function animals_uninstall() {
+  // Delete the animal entity type.
+  \Drupal::entityTypeManager()->getStorage('animal')->delete();
+}
+
+/**
+ * Implements hook_update_N().
+ */
+function animals_update_8100() {
+  // Update the animal entity type.
+  animals_create_animal_entity_type();
+}
+
+/**
+ * Creates the animal entity type.
+ */
+function animals_create_animal_entity_type() {
+  $entity_type = \Drupal::entityTypeManager()->getDefinition('animal');
+  if (!$entity_type) {
+    $entity_type = \Drupal::entityTypeManager()->getStorage('entity_type')->create([
+      'id' => 'animal',
+      'label' => 'Animal',
+      'base_table' => 'animal',
+      'entity_keys' => [
+        'id' => 'id',
+        'label' => 'name',
+        'uuid' => 'uuid',
+      ],
+      'field_ui_base_route' => 'entity.animal.collection',
+    ]);
+    $entity_type->save();
+  }
+}

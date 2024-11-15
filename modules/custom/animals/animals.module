@@ -1,0 +1,47 @@
+<?php
+
+/**
+ * @file
+ * Contains animals.module.
+ */
+
+/**
+ * Implements hook_entity_type_build().
+ */
+function animals_entity_type_build(array &$entity_types) {
+  $entity_types['animal'] = \Drupal::entityTypeManager()->getDefinition('animal');
+}
+
+/**
+ * Implements hook_entity_bundle_info().
+ */
+function animals_entity_bundle_info(array &$bundles) {
+  $bundles['animal']['dog'] = [
+    'label' => t('Dog'),
+    'description' => t('A type of animal that is a dog.'),
+    'fields' => [
+      'dog_breed' => [
+        'type' => 'paragraph',
+        'label' => t('Dog Breed'),
+        'description' => t('The breed of the dog.'),
+        'settings' => [
+          'handler' => 'default:paragraph',
+          'handler_settings' => [
+            'target_bundles' => [
+              'dog_breed' => 'dog_breed',
+            ],
+          ],
+        ],
+      ],
+      'quantity' => [
+        'type' => 'integer',
+        'label' => t('Quantity'),
+        'description' => t('The quantity of the animal.'),
+        'settings' => [
+          'min' => 1,
+          'max' => 100,
+        ],
+      ],
+    ],
+  ];
+}

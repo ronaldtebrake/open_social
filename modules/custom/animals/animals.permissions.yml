@@ -1,0 +1,9 @@
+# Permissions for managing animal entities
+manage animal entities:
+  title: 'Manage animal entities'
+  description: 'Allows users to manage animal entities.'
+
+# Permissions for managing animal type entities
+manage animal type entities:
+  title: 'Manage animal type entities'
+  description: 'Allows users to manage animal type entities.'

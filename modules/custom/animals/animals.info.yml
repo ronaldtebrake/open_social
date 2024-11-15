@@ -1,0 +1,11 @@
+name: Animals
+type: module
+description: This module contains a custom entity called animal and other types of animals.
+core_version_requirement: ^9
+package: Custom
+dependencies:
+  - drupal:field
+  - drupal:paragraphs
+  - drupal:node
+  - drupal:taxonomy
+  - drupal:user

@@ -1,0 +1,51 @@
+animal.list:
+  path: '/animals'
+  defaults:
+    _controller: '\Drupal\animals\Controller\AnimalController::list'
+    _title: 'Animals'
+  requirements:
+    _permission: 'access content'
+
+animal.view:
+  path: '/animals/{animal}'
+  defaults:
+    _controller: '\Drupal\animals\Controller\AnimalController::view'
+    _title: 'View Animal'
+  requirements:
+    _permission: 'access content'
+    animal: \d+
+
+animal.delete:
+  path: '/animals/{animal}/delete'
+  defaults:
+    _controller: '\Drupal\animals\Controller\AnimalController::delete'
+    _title: 'Delete Animal'
+  requirements:
+    _permission: 'administer animals'
+    animal: \d+
+
+animal_type.list:
+  path: '/animal-types'
+  defaults:
+    _controller: '\Drupal\animals\Controller\AnimalTypeController::list'
+    _title: 'Animal Types'
+  requirements:
+    _permission: 'access content'
+
+animal_type.view:
+  path: '/animal-types/{animal_type}'
+  defaults:
+    _controller: '\Drupal\animals\Controller\AnimalTypeController::view'
+    _title: 'View Animal Type'
+  requirements:
+    _permission: 'access content'
+    animal_type: \d+
+
+animal_type.delete:
+  path: '/animal-types/{animal_type}/delete'
+  defaults:
+    _controller: '\Drupal\animals\Controller\AnimalTypeController::delete'
+    _title: 'Delete Animal Type'
+  requirements:
+    _permission: 'administer animal types'
+    animal_type: \d+
