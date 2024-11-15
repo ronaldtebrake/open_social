@@ -974,3 +974,22 @@ function social_group_update_11004(): string {
   // Output logged messages to related channel of update execution.
   return $updateHelper->logger()->output();
 }
+
+/**
+ * Migration path for upgrading from Group 2.x to 3.x.
+ */
+function social_group_update_11005() {
+  // Add migration scripts and updates related to the upgrade.
+  // Example: Update group content relationships.
+  $query = \Drupal::database()->select('group_content_field_data', 'gcfd')
+    ->fields('gcfd', ['id', 'type'])
+    ->condition('gcfd.type', 'group_content', 'LIKE');
+  $result = $query->execute();
+
+  foreach ($result as $record) {
+    \Drupal::database()->update('group_content_field_data')
+      ->fields(['type' => 'group_relationship'])
+      ->condition('id', $record->id)
+      ->execute();
+  }
+}

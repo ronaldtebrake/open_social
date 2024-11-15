@@ -18,9 +18,9 @@ function social_group_views_data_alter(array &$data) {
     'help' => t('User is member of the group'),
     'argument' => [
       'field' => 'uid',
-      'name table' => 'group_content_field_data',
+      'name table' => 'group_relationship_field_data',
       'name field' => 'name',
-      'id' => 'group_content_user_uid',
+      'id' => 'group_relationship_user_uid',
       'no group by' => TRUE,
     ],
   ];
@@ -35,7 +35,7 @@ function social_group_views_data_alter(array &$data) {
   ];
 
   // Field with the count of group members.
-  $data['group_content']['group_membership_count'] = [
+  $data['group_relationship']['group_membership_count'] = [
     'title' => t('Membership count'),
     'field' => [
       'title' => t('Membership count'),

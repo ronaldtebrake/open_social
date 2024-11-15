@@ -12,7 +12,7 @@ services:
       - '@entity_type.manager'
   social_group.cross_posting:
     class: Drupal\social_group\CrossPostingService
-    arguments: ['@entity_type.manager', '@database', '@plugin.manager.group_content_enabler']
+    arguments: ['@entity_type.manager', '@database', '@plugin.manager.group_relationship_enabler']
   social_group.set_groups_for_node_service:
     class: Drupal\social_group\SetGroupsForNodeService
     arguments: ['@entity_type.manager', '@module_handler']

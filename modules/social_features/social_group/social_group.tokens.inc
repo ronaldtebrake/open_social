@@ -75,12 +75,12 @@ function social_group_tokens($type, $tokens, array $data, array $options, Bubble
               if (is_object($entity)) {
                 switch ($target_type) {
 
-                  // If it's group content.
-                  case 'group_content':
-                    /** @var \Drupal\group\Entity\GroupContent $entity */
-                    $group_content_type = $entity->getGroupContentType();
-                    if (!empty($group_content_type)) {
-                      $display_name = $group_content_type->label();
+                  // If it's group relationship.
+                  case 'group_relationship':
+                    /** @var \Drupal\group\Entity\GroupRelationship $entity */
+                    $group_relationship_type = $entity->getGroupRelationshipType();
+                    if (!empty($group_relationship_type)) {
+                      $display_name = $group_relationship_type->label();
                       $content_url = Url::fromRoute('entity.node.canonical',
                         ['node' => $entity->getEntity()->id()],
                         ['absolute' => TRUE]
@@ -167,15 +167,15 @@ function social_group_tokens_alter(array &$replacements, array $context, Bubblea
         /** @var \Drupal\social_activity\EmailTokenServices $email_token_services */
         $email_token_services = \Drupal::service('social_activity.email_token_services');
 
-        if (!empty($group_content = $email_token_services->getRelatedObject($message)) && $group_content->getEntityTypeId() == 'group_content') {
-          /** @var \Drupal\group\Entity\GroupContentInterface $group_content */
+        if (!empty($group_relationship = $email_token_services->getRelatedObject($message)) && $group_relationship->getEntityTypeId() == 'group_relationship') {
+          /** @var \Drupal\group\Entity\GroupRelationshipInterface $group_relationship */
           // Get the group entity.
           /** @var Drupal\group\Entity\Group $group */
-          $group = $group_content->getGroup();
+          $group = $group_relationship->getGroup();
           if ($group instanceof Group) {
-            if ($group_content->getContentPlugin()->getPluginId() === 'group_membership') {
+            if ($group_relationship->getContentPlugin()->getPluginId() === 'group_membership') {
               $message_template_id = $message->getTemplate()->id();
-              $link = $group_content->getGroup()->toUrl();
+              $link = $group_relationship->getGroup()->toUrl();
               switch ($message_template_id) {
                 case 'approve_request_join_group':
                   if (isset($context['tokens']['cta_button'])) {
@@ -192,7 +192,7 @@ function social_group_tokens_alter(array &$replacements, array $context, Bubblea
 
                 case 'join_to_group':
                   if (isset($context['tokens']['cta_button'])) {
-                    $link = Url::fromRoute('view.group_members.page_group_members', ['group' => $group_content->getGroup()->id()]);
+                    $link = Url::fromRoute('view.group_members.page_group_members', ['group' => $group_relationship->getGroup()->id()]);
                     $cta_button = $email_token_services->getCtaButton($link, new TranslatableMarkup('See all members'));
                     $replacements[$context['tokens']['cta_button']] = \Drupal::service('renderer')
                       ->renderPlain($cta_button);
@@ -200,7 +200,7 @@ function social_group_tokens_alter(array &$replacements, array $context, Bubblea
                   // Replace the preview token.
                   if (isset($context['tokens']['preview'])) {
                     /** @var \Drupal\user\Entity\User $user */
-                    $user = $group_content->getEntity();
+                    $user = $group_relationship->getEntity();
                     if ($user instanceof UserInterface) {
                       $preview_info = $email_token_services->getUserPreview($user);
                       $replacements[$context['tokens']['preview']] = \Drupal::service('renderer')->renderPlain($preview_info);
