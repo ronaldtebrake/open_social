@@ -8,6 +8,8 @@
 use Drupal\block\Entity\Block;
 use Drupal\Core\Access\AccessResult;
 use Drupal\Core\Cache\RefinableCacheableDependencyInterface;
+use Drupal\Core\Database\Query\AlterableInterface;
+use Drupal\Core\Database\Query\SelectInterface;
 use Drupal\Core\Entity\Display\EntityFormDisplayInterface;
 use Drupal\Core\Entity\EntityInterface;
 use Drupal\Core\Form\FormStateInterface;
@@ -16,14 +18,14 @@ use Drupal\Core\Render\BubbleableMetadata;
 use Drupal\Core\Session\AccountInterface;
 use Drupal\Core\TypedData\Exception\MissingDataException;
 use Drupal\Core\Url;
-use Drupal\ginvite\GroupInvitation as GroupInvitationWrapper;
-use Drupal\ginvite\Plugin\GroupContentEnabler\GroupInvitation;
-use Drupal\group\Entity\GroupContent;
-use Drupal\group\Entity\GroupContentInterface;
+use Drupal\ginvite\Plugin\Group\Relation\GroupInvitation;
+use Drupal\group\Entity\GroupRelationship;
+use Drupal\group\Entity\GroupRelationshipInterface;
 use Drupal\group\Entity\GroupInterface;
 use Drupal\group\Entity\GroupRoleInterface;
 use Drupal\group\Entity\GroupTypeInterface;
-use Drupal\social_group_invite\Plugin\Action\SocialGroupInviteResend;
+use Drupal\social_group_invite\Plugin\Field\FieldFormatter\EntityReferenceLabelFormatterOverrider;
+use Drupal\views\ViewExecutable;
 
 /**
  * Implements hook_menu_local_actions_alter().
@@ -48,6 +50,38 @@ function social_group_invite_theme(): array {
       'variables' => [
         'url' => NULL,
         'link' => NULL,
+      ],
+    ],
+  ];
+}
+
+/**
+ * Implements hook_config_schema_info_alter().
+ */
+function social_group_invite_config_schema_info_alter(array &$definitions): void {
+  $definitions['social_group.settings']['mapping']['group_invite'] = [
+    'type' => 'mapping',
+    'label' => 'Group invite settings',
+    'mapping' => [
+      'invite_subject' => [
+        'type' => 'text',
+        'label' => 'Invite subject',
+      ],
+      'invite_message' => [
+        'type' => 'text',
+        'label' => 'Invite message',
+      ],
+      'invite_resend_message' => [
+        'type' => 'text',
+        'label' => 'Invite resend message',
+      ],
+      'email_verification' => [
+        'type' => 'boolean',
+        'label' => 'Email verification status',
+      ],
+      'invite_by_members' => [
+        'type' => 'boolean',
+        'label' => 'Invite by members status',
       ],
     ],
   ];
@@ -100,13 +134,12 @@ function social_group_invite_block_access(Block $block, $operation, AccountInter
   // will allow users to go back.
   if (in_array($route_name, $routes_to_check)) {
     $block_id = $block->getPluginId();
-    /** @var \Drupal\group\Entity\GroupContent $group_content */
+    /** @var \Drupal\group\Entity\GroupRelationshipInterface $group_content */
     $group_content = \Drupal::routeMatch()->getParameter('group_content');
 
     // Only if we are sure it's a group invitation.
-    if (NULL !== $group_content &&
-      NULL !== $group_content->getGroupContentType() &&
-      $group_content->getGroupContentType()->getContentPluginId() === 'group_invitation') {
+    if ($group_content instanceof GroupRelationshipInterface &&
+      $group_content->getRelationshipType()->getPluginId() === 'group_invitation') {
       // This is a list of the blocks that this function cares about,
       // if we're being called for a different block we exit early.
       $hide_blocks = [
@@ -165,8 +198,10 @@ function social_group_invite_preprocess_views_view(&$variables) {
     }
   }
   // Implement button to go back to the group for our custom view.
-  if ($variables['view']->id() === 'social_group_invitations') {
-    $group = _social_group_get_current_group();
+  elseif (
+    $view->id() === 'social_group_invitations' &&
+    ($group = _social_group_get_current_group()) !== NULL
+  ) {
     $variables['more'] = [
       '#title' => t('Back to group'),
       '#type' => 'link',
@@ -193,7 +228,7 @@ function social_group_invite_preprocess_views_view_field(&$variables) {
   if ($view->id() === 'social_group_invitations') {
     // For invite status we want to show the readable name.
     if ($variables['field']->field === 'invitation_status' && !empty($variables['row']->_entity)) {
-      /** @var \Drupal\group\Entity\GroupContent $entity */
+      /** @var \Drupal\group\Entity\GroupRelationship $entity */
       $entity = $variables['row']->_entity;
       // If we have a invite we check it's status.
       $field_value = _social_group_get_group_invite_value($entity, 'invitation_status');
@@ -241,7 +276,7 @@ function social_group_invite_preprocess_views_view_field(&$variables) {
 /**
  * Return a group invites field value if it exists.
  *
- * @param \Drupal\group\Entity\GroupContent $entity
+ * @param \Drupal\group\Entity\GroupRelationship $entity
  *   Group invitation.
  * @param string $field_name
  *   The field name.
@@ -249,7 +284,7 @@ function social_group_invite_preprocess_views_view_field(&$variables) {
  * @return string|null
  *   The field value or NULL if there isn't any.
  */
-function _social_group_get_group_invite_value(GroupContent $entity, $field_name) {
+function _social_group_get_group_invite_value(GroupRelationship $entity, $field_name) {
   $field_value = NULL;
   if ($entity->hasField($field_name)) {
     try {
@@ -278,7 +313,7 @@ function _social_group_invite_current_type_enabled_invites() {
   // Check if group type has content plugin enabled.
   if ($group instanceof GroupInterface) {
     $group_type = $group->getGroupType();
-    if ($group_type->hasContentPlugin('group_invitation')) {
+    if ($group_type->hasPlugin('group_invitation')) {
       $enabled = TRUE;
     }
   }
@@ -307,17 +342,17 @@ function social_group_invite_theme_registry_alter(&$theme_registry) {
  */
 function social_group_invite_preprocess_page_title(&$variables) {
   // Add count of pending invites to the page title for a group.
-  if (\Drupal::routeMatch()->getParameter('view_id') === 'social_group_invitations' &&
-    !empty(\Drupal::routeMatch()->getParameter('group'))) {
-    $group = _social_group_get_current_group();
-    if (!empty($group->label())) {
-      $loader = \Drupal::service('ginvite.invitation_loader');
-      $count = count($loader->loadByProperties(['gid' => $group->id()]));
-      $title = \Drupal::translation()->formatPlural($count, '1 membership invite for group: @group_name', '@count membership invites for group: @group_name', ['@group_name' => $group->label()]);
-      $variables['title'] = $title;
-      $variables['#cache']['tags'][] = 'group_content_list:group:' . $group->id();
-      $variables['#cache']['tags'][] = 'group_content_list:plugin:group_invitation:group:' . $group->id();
-    }
+  if (
+    \Drupal::routeMatch()->getParameter('view_id') === 'social_group_invitations' &&
+    !empty(\Drupal::routeMatch()->getParameter('group')) &&
+    ($group = _social_group_get_current_group()) !== NULL
+  ) {
+    $loader = \Drupal::service('ginvite.invitation_loader');
+    $count = count($loader->loadByProperties(['gid' => $group->id()]));
+    $title = \Drupal::translation()->formatPlural($count, '1 membership invite for group: @group_name', '@count membership invites for group: @group_name', ['@group_name' => $group->label()]);
+    $variables['title'] = $title;
+    $variables['#cache']['tags'][] = 'group_content_list:group:' . $group->id();
+    $variables['#cache']['tags'][] = 'group_content_list:plugin:group_invitation:group:' . $group->id();
   }
   // Add count of pending invites to the page title for a user.
   if (\Drupal::routeMatch()->getParameter('view_id') === 'social_group_user_invitations' &&
@@ -343,11 +378,7 @@ function social_group_invite_form_alter(&$form, FormStateInterface $form_state, 
   // has it's own routes, with no group context that loads the
   // join form. Decline is done differently. Due to the fact on joining
   // users need to fill in their membership fields.
-  $social_group_types = [
-    'open_group',
-    'closed_group',
-    'public_group',
-  ];
+  $social_group_types = [];
 
   // Also include any added optional group types.
   \Drupal::moduleHandler()->alter('social_group_types', $social_group_types);
@@ -406,14 +437,14 @@ function _social_group_invite_action_form_submit($form, FormStateInterface $form
   $invite_content = \Drupal::routeMatch()->getParameter('group_content');
   $group = '';
 
-  if ($invite_content instanceof GroupContentInterface) {
+  if ($invite_content instanceof GroupRelationshipInterface) {
     $group = $invite_content->getGroup();
   }
   elseif (is_string($invite_content)) {
     $group_content = \Drupal::entityTypeManager()->getStorage('group_content')
       ->load($invite_content);
 
-    if ($group_content instanceof GroupContentInterface) {
+    if ($group_content instanceof GroupRelationshipInterface) {
       $group = $group_content->getGroup();
     }
   }
@@ -461,10 +492,6 @@ function social_group_invite_set_default_permissions_for_group_type(GroupTypeInt
     $role = $roles[$group_type->id() . '-group_manager'];
     social_group_invite_set_default_permissions_for_role_on_group_type($role);
   }
-  if (!empty($roles[$group_type->id() . '-group_admin'])) {
-    $role = $roles[$group_type->id() . '-group_admin'];
-    social_group_invite_set_default_permissions_for_role_on_group_type($role);
-  }
 }
 
 /**
@@ -473,11 +500,11 @@ function social_group_invite_set_default_permissions_for_group_type(GroupTypeInt
 function social_group_invite_preprocess_activity(&$variables) {
   $activity = $variables['elements']['#activity'];
   $related_entity = $activity->getRelatedEntity();
-  // If the related entity is a piece of GroupContent and coming from the
+  // If the related entity is a piece of GroupRelationship and coming from the
   // ginvite group_invitation plugin, lets link the entity to the group itself.
   if (!empty($related_entity) &&
-    $related_entity instanceof GroupContent &&
-    $related_entity->getGroupContentType()->getContentPluginId() === 'group_invitation') {
+    $related_entity instanceof GroupRelationship &&
+    $related_entity->getRelationshipType()->getPluginId() === 'group_invitation') {
     $group = $related_entity->getGroup();
     if ($group instanceof GroupInterface) {
       $variables['full_url'] = $group->toUrl('canonical');
@@ -486,106 +513,124 @@ function social_group_invite_preprocess_activity(&$variables) {
 }
 
 /**
- * Implements hook_preprocess_group().
+ * Implements hook_preprocess_join().
  */
-function social_group_invite_preprocess_group(&$variables) {
-  /** @var \Drupal\group\Entity\GroupInterface $group */
-  $group = $variables['group'];
-  $group_type = $group->getGroupType();
-  $variables['user_is_invited'] = FALSE;
+function social_group_invite_preprocess_join(array &$variables): void {
+  $entity = $variables['entity'];
 
-  if ($variables['view_mode'] === 'statistic') {
-    $url = Url::fromRoute('ginvite.invitation.bulk', ['group' => $group->id()]);
-    $group_url = Url::fromRoute('view.group_information.page_group_about', ['group' => $group->id()], ['absolute' => TRUE]);
-    // For groups that only group members have access to, we should not show the
-    // share link functionality.
-    if (
-      ($group->hasField('field_flexible_group_visibility') &&
-        !$group->get('field_flexible_group_visibility')->isEmpty() &&
-        $group->get('field_flexible_group_visibility')->getValue()[0]['value'] === 'members') ||
-      in_array($group->bundle(), ['closed_group', 'secret_group'])
-    ) {
-      $group_url = NULL;
-    }
-
-    $group_settings = \Drupal::config('social_group.settings');
-    // Show share/invite button only if member is allowed to do that.
-    if (
-      (bool) $group_settings->get('group_invite.invite_by_members') &&
-      $url->access(\Drupal::currentUser())
-    ) {
-      $variables['members_allowed_to_invite'] = TRUE;
-      $variables['invite_content'] = [
-        '#theme' => 'invite_to_group_by_member',
-        '#url' => $group_url,
-        '#link' => Link::fromTextAndUrl(t('Invite via email'), $url)
-          ->toRenderable(),
-      ];
-    }
-  }
-
-  // Only for groups that have invites enabled.
-  if (!$group_type->hasContentPlugin('group_invitation')) {
+  if (!$entity instanceof GroupInterface) {
     return;
   }
 
-  // Only for LU.
-  $account = \Drupal::currentUser();
-  if ($account->isAnonymous()) {
+  $url = Url::fromRoute('ginvite.invitation.bulk', [
+    'group' => $entity->id(),
+  ]);
+
+  if (!$url->access()) {
     return;
   }
 
-  // Check if the user (entity_id) has a pending invite for the group.
-  $properties = [
-    'entity_id' => $account->id(),
-    'gid' => $group->id(),
-    'invitation_status' => GroupInvitation::INVITATION_PENDING,
+  $config = \Drupal::config('social_group.settings');
+
+  if (!$config->get('group_invite.invite_by_members')) {
+    return;
+  }
+
+  // For groups that only group members have access to, we should not show the
+  // share link functionality.
+  if (
+    $entity->hasField('field_flexible_group_visibility') &&
+    !$entity->field_flexible_group_visibility->isEmpty() &&
+    $entity->field_flexible_group_visibility->value === 'members'
+  ) {
+    $group_url = NULL;
+  }
+  else {
+    $group_url = Url::fromRoute('view.group_information.page_group_about', [
+      'group' => $entity->id(),
+    ], [
+      'absolute' => TRUE,
+    ]);
+  }
+
+  // Show share/invite button only if member is allowed to do that.
+  $variables['invite_widget'] = [
+    '#theme' => 'invite_to_group_by_member',
+    '#url' => $group_url,
+    '#link' => Link::fromTextAndUrl(t('Invite via email'), $url)
+      ->toRenderable(),
   ];
-  /** @var \Drupal\ginvite\GroupInvitationLoaderInterface $loader */
-  $loader = \Drupal::service('ginvite.invitation_loader');
-  $invitations = $loader->loadByProperties($properties);
-  // We have pending invites, let's build a button to accept or decline one.
-  if ($invitations > 0) {
-    // Build routes.
-    $invitation = reset($invitations);
-    if ($invitation instanceof GroupInvitationWrapper) {
-      // Lets grab the group content so we can build the URL.
-      $group_content = $invitation->getGroupContent();
-      if ($group_content instanceof GroupContent) {
-        $variables['user_is_invited'] = TRUE;
-        // It will become two links with a dropdown button.
-        $variables['group_invite_accept_operations_url'] = Url::fromRoute('ginvite.invitation.accept', ['group_content' => $group_content->id()]);
-        $variables['group_invite_decline_operations_url'] = Url::fromRoute('ginvite.invitation.decline', ['group_content' => $group_content->id()]);
-        $variables['#cache']['tags'][] = 'group_content_list:entity:' . $account->id();
-        $variables['#cache']['tags'][] = 'group_content_list:plugin:group_invitation:entity:' . $account->id();
-        $variables['#cache']['contexts'][] = 'user';
-      }
-    }
-  }
 }
 
 /**
- * Implements hook_form_FORM_ID_alter() for "social_group_form".
+ * Implements hook_form_FORM_ID_alter().
  */
 function social_group_invite_form_social_group_form_alter(&$form, FormStateInterface $form_state, $form_id) {
   $invite_config = \Drupal::config('social_group.settings')
     ->get('group_invite');
+
   $form['group_invite'] = [
     '#type' => 'details',
     '#title' => t('Group invite settings'),
     '#weight' => 30,
   ];
 
-  $default_subject = '[current-user:display-name] has invited you to join a group on [site:name].';
-  $form['group_invite']['invite_subject'] = [
+  // "Group invite" allows to have invite message per each group where
+  // this group content type plugin is enabled.
+  // Here we allow for SM to have separate invite message for each group type.
+  $form['group_invite']['invite_message_tabs'] = [
+    '#type' => 'vertical_tabs',
+  ];
+  $configurations = (array) \Drupal::entityQuery('group_content_type')
+    ->condition('content_plugin', 'group_invitation')
+    ->condition('status', TRUE)
+    ->accessCheck(FALSE)
+    ->execute();
+
+  $default_subject = '[user:display-name] has invited you to join a group on [site:name].';
+  $default_message = "Hi,<br /><br /> I would like to invite you to join my group [group:title] on [site:name].<br /><br />Kind regards,<br />[user:display-name]<br /><br />\r\n<table class=\"btn-wrapp\">\r\n\t<tbody>\r\n\t\t<tr>\r\n\t\t\t<td class=\"align-center\"><a class=\"btn-link btn-link-bg btn-link-one\" href=\"[group_content:register_link]\">View group</a></td>\r\n\t\t\t<td class=\"align-center\"><a class=\"btn-link btn-link-bg btn-link-one\" href=\"[site:url]\">About [site:name]</a></td>\r\n\t\t</tr>\r\n\t</tbody>\r\n</table>";
+
+  foreach ($configurations as $name) {
+    $config = \Drupal::configFactory()->getEditable("group.content_type.$name");
+
+    /** @var \Drupal\group\Entity\GroupTypeInterface $group_type */
+    $group_type = \Drupal::entityTypeManager()->getStorage('group_type')
+      ->load($config->get('group_type'));
+
+    $form[$name] = [
+      '#type' => 'details',
+      '#title' => $group_type->label(),
+      '#group' => 'invite_message_tabs',
+      '#tree' => TRUE,
+    ];
+
+    $form[$name]['invitation_subject'] = [
+      '#type' => 'textfield',
+      '#title' => t('Subject'),
+      '#default_value' => $config->get('plugin_config.invitation_subject') ?? ($invite_config['invite_subject'] ?? $default_subject),
+    ];
+
+    $form[$name]['invitation_body'] = [
+      '#type' => 'textarea',
+      '#title' => t('Message'),
+      '#default_value' => $config->get('plugin_config.invitation_body') ?? ($invite_config['invite_message'] ?? $default_message),
+    ];
+  }
+
+  // Default fallback invite message.
+  $form['default'] = [
+    '#type' => 'details',
+    '#title' => t('Default'),
+    '#description' => t('If any of above is empty this will be used as fallback.'),
+    '#group' => 'invite_message_tabs',
+  ];
+  $form['default']['invite_subject'] = [
     '#type' => 'textfield',
     '#title' => t('Subject'),
     '#default_value' => $invite_config['invite_subject'] ?? $default_subject,
     '#required' => TRUE,
   ];
-
-  $default_message = "Hi,<br /><br /> I would like to invite you to join my group [group:title] on [site:name].<br /><br />Kind regards,<br />[current-user:display-name]<br /><br />\r\n<table class=\"btn-wrapp\">\r\n\t<tbody>\r\n\t\t<tr>\r\n\t\t\t<td class=\"align-center\"><a class=\"btn-link btn-link-bg btn-link-one\" href=\"[group_content:register_link]\">View group</a></td>\r\n\t\t\t<td class=\"align-center\"><a class=\"btn-link btn-link-bg btn-link-one\" href=\"[site:url]\">About [site:name]</a></td>\r\n\t\t</tr>\r\n\t</tbody>\r\n</table>";
-  $form['group_invite']['invite_message'] = [
+  $form['default']['invite_message'] = [
     '#type' => 'textarea',
     '#title' => t('Message'),
     '#default_value' => $invite_config['invite_message'] ?? $default_message,
@@ -639,64 +684,26 @@ function _social_group_invite_settings_submit($form, FormStateInterface $form_st
     ->set('group_invite.email_verification', $form_state->getValue('email_verification'))
     ->set('group_invite.invite_by_members', $form_state->getValue('invite_by_members'))
     ->save();
-}
 
-/**
- * Implements hook_mail_alter().
- */
-function social_group_invite_mail_alter(&$message) {
-  if ($message['id'] === 'ginvite_invite') {
-    $params = $message['params'];
-    $token_service = \Drupal::token();
-    $language_manager = \Drupal::languageManager();
+  // Update invite messages per group type.
+  $configurations = (array) \Drupal::entityQuery('group_content_type')
+    ->condition('content_plugin', 'group_invitation')
+    ->condition('status', TRUE)
+    ->accessCheck(FALSE)
+    ->execute();
 
-    $langcode = $message['langcode'];
-
-    $language = $language_manager->getLanguage($langcode);
-    $original_language = $language_manager->getConfigOverrideLanguage();
-    $language_manager->setConfigOverrideLanguage($language);
-
-    // Load group invite configuration.
-    $group_config = \Drupal::config('social_group.settings');
-    $invite_settings = $group_config->get('group_invite');
-
-    // Alter message and subject if it configured.
-    if (
-      !is_null($invite_settings) &&
-      isset($invite_settings['invite_subject'], $invite_settings['invite_message'])
-    ) {
-      // Check if the invitation is resent and site managers decided to change
-      // the invitation email text.
-      if ($invite_settings['invite_resend_message']) {
-        $tempstore = \Drupal::service('tempstore.shared')->get('social_group_invite');
-        $resent_invites = (array) $tempstore->get(SocialGroupInviteResend::TEMP_STORE_ID);
-        if (!empty($resent_invites)) {
-          // The mail params list should contain group content entity.
-          /* @see ginvite_group_content_insert() */
-          if (
-            ($params['group_content'] instanceof GroupContentInterface) &&
-            in_array($params['group_content']->uuid(), $resent_invites)
-          ) {
-            $overridden_body = $invite_settings['invite_resend_message'];
-            // Remove handled resent invite from list.
-            unset($resent_invites[$params['group_content']->uuid()]);
-            $tempstore->set(SocialGroupInviteResend::TEMP_STORE_ID, $resent_invites);
-          }
-        }
-      }
-
-      $invitation_subject = $invite_settings['invite_subject'];
-      $invitation_body = $overridden_body ?? $invite_settings['invite_message'];
-
-      unset($params['existing_user']);
-
-      $body = $token_service->replace($invitation_body, $params);
-      $subject = $token_service->replace($invitation_subject, $params);
-
-      $message['subject'] = $subject;
-      $message['body'][0] = $body;
+  foreach ($configurations as $name) {
+    $config = \Drupal::configFactory()->getEditable("group.content_type.$name");
+    $subject = $form_state->getValue([$name, 'invitation_subject']);
+    if ($config->get('plugin_config.invitation_subject') !== $subject) {
+      $config->set('plugin_config.invitation_subject', $subject);
+      $config->save();
     }
-    $language_manager->setConfigOverrideLanguage($original_language);
+    $body = $form_state->getValue([$name, 'invitation_body']);
+    if ($config->get('plugin_config.invitation_body') !== $body) {
+      $config->set('plugin_config.invitation_body', $body);
+      $config->save();
+    }
   }
 }
 
@@ -709,10 +716,14 @@ function social_group_invite_tokens_alter(array &$replacements, array $context, 
     isset($context["data"]["group"]) &&
     $context["type"] === 'group_content'
   ) {
-    /** @var \Drupal\group\Entity\GroupContentInterface|mixed[] $group_content */
+    /** @var \Drupal\group\Entity\GroupRelationshipInterface $group_content */
     $group_content = $context["data"]["group_content"];
     $group_content_id = $group_content->get('id')->getString();
+
+    // We are using a destination for use with the register link.
+    // This destination is only used when user's don't have an account yet.
     $destination = 'destination=/social-group-invite/' . $group_content_id . '/accept';
+    $group_invite_url = Url::fromRoute('social_group_invite.invitation.accept', ['group_content' => $group_content_id], ['absolute' => TRUE])->toString();
 
     // For groups that only group members have access to, we should change the
     // destination to the user's invites page.
@@ -720,11 +731,13 @@ function social_group_invite_tokens_alter(array &$replacements, array $context, 
     if (
       ($group->hasField('field_flexible_group_visibility') &&
       !$group->get('field_flexible_group_visibility')->isEmpty() &&
-      $group->get('field_flexible_group_visibility')->getValue()[0]['value'] === 'members') ||
-      in_array($group->bundle(), ['closed_group', 'secret_group'])
+      $group->get('field_flexible_group_visibility')->getValue()[0]['value'] === 'members')
     ) {
+
+      // Update the destination for use with the register link.
       $url = Url::fromRoute('social_core.my_invites')->toString();
       $destination = 'destination=' . $url;
+      $group_invite_url = Url::fromRoute('social_core.my_invites', [], ['absolute' => TRUE])->toString();
     }
     // Attach destination to accept invite. So, after sign up/sign step the
     // invite will be accepted and user  will be redirected to the invited page.
@@ -741,8 +754,7 @@ function social_group_invite_tokens_alter(array &$replacements, array $context, 
       $context["tokens"]["my_invitations_link"] === '[group_content:my_invitations_link]'
     ) {
       // For existing users for my_invitations_link token.
-      $group_invitations_link = Url::fromRoute('user.login', [], ['absolute' => TRUE])->toString();
-      $replacements["[group_content:my_invitations_link]"] = "{$group_invitations_link}?{$destination}";
+      $replacements["[group_content:my_invitations_link]"] = $group_invite_url;
     }
   }
 }
@@ -782,12 +794,12 @@ function social_group_invite_entity_operation_alter(array &$operations, EntityIn
     return;
   }
 
-  /** @var \Drupal\group\Entity\GroupContentInterface $entity */
+  /** @var \Drupal\group\Entity\GroupRelationshipInterface $entity */
   if ($entity->getEntityTypeId() !== 'group_content') {
     return;
   }
 
-  if ($entity->getContentPlugin()->getPluginId() === 'group_invitation') {
+  if ($entity->getPluginId() === 'group_invitation') {
     // Hide "view" operation as a redundant on this page.
     unset($operations['view']);
     // Rename default operation.
@@ -819,4 +831,69 @@ function social_group_invite_preprocess_page(array &$variables): void {
     // Hide redundant region on the page.
     $variables['page']['complementary_top'] = [];
   }
+}
+
+/**
+ * Implements hook_field_formatter_info_alter().
+ */
+function social_group_invite_field_formatter_info_alter(array &$info): void {
+  // If a user has been invited to the group to which user does not have an
+  // access, the user cannot see the group title on the group invite page.
+  // The problem is default group title rendered through the
+  // "entity_reference_label" field formatter checks access to the entity.
+  // Altered class to skip this check for the group entity on the group invites
+  // page.
+  if (isset($info['entity_reference_label'])) {
+    $info['entity_reference_label']['class'] = EntityReferenceLabelFormatterOverrider::class;
+  }
+}
+
+/**
+ * Implements hook_query_TAG_alter() for "group_content_access".
+ *
+ * @see group_query_entity_query_alter()
+ */
+function social_group_invite_query_group_content_access_alter(AlterableInterface $query): void {
+  if (!$query instanceof SelectInterface) {
+    return;
+  }
+
+  $view = $query->getMetaData('view');
+  if (!$view instanceof ViewExecutable) {
+    return;
+  }
+
+  if ($view->id() !== 'social_group_user_invitations') {
+    return;
+  }
+
+  /** @var \Drupal\Core\Database\Query\Condition $condition */
+  foreach (array_column($query->conditions(), 'field') as $condition) {
+    if (!isset($condition->conditions()['#conjunction'])) {
+      continue;
+    }
+
+    if ($condition->conditions()['#conjunction'] !== 'OR') {
+      continue;
+    }
+
+    /* @see \Drupal\group\QueryAccess\GroupRelationshipQueryAlter */
+    $group_relationship_query_conditions = $condition;
+  }
+
+  if (!isset($group_relationship_query_conditions)) {
+    return;
+  }
+
+  $data_table = 'group_relationship_field_data';
+
+  $see_own_invites_condition = $group_relationship_query_conditions->andConditionGroup()
+    ->condition("$data_table.type", '%-group_invitation', 'LIKE')
+    ->condition(
+      ($group_relationship_query_conditions->orConditionGroup())
+        ->condition("$data_table.uid", \Drupal::currentUser()->id())
+        ->condition("$data_table.entity_id", \Drupal::currentUser()->id())
+    );
+
+  $group_relationship_query_conditions->condition($see_own_invites_condition);
 }

@@ -8,11 +8,9 @@ use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\Core\Form\ConfigFormBase;
 use Drupal\Core\Form\FormStateInterface;
-use Drupal\Core\Link;
 use Drupal\Core\Render\Element\Checkboxes;
-use Drupal\Core\Url;
 use Drupal\crop\Entity\CropType;
-use Drupal\group\Plugin\GroupContentEnablerManagerInterface;
+use Drupal\group\Plugin\Group\Relation\GroupRelationTypeManagerInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 
 /**
@@ -25,9 +23,9 @@ class SocialGroupSettings extends ConfigFormBase {
   /**
    * The group content plugin manager.
    *
-   * @var \Drupal\group\Plugin\GroupContentEnablerManagerInterface
+   * @var \Drupal\group\Plugin\Group\Relation\GroupRelationTypeManagerInterface
    */
-  protected $groupContentPluginManager;
+  protected $groupRelationTypeManager;
 
   /**
    * The entity type manager.
@@ -52,19 +50,19 @@ class SocialGroupSettings extends ConfigFormBase {
    *   The entity manager.
    * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
    *   The module handler service.
-   * @param \Drupal\group\Plugin\GroupContentEnablerManagerInterface $group_content_plugin_manager
+   * @param \Drupal\group\Plugin\Group\Relation\GroupRelationTypeManagerInterface $group_content_plugin_manager
    *   The group content plugin manager.
    */
   public function __construct(
     ConfigFactoryInterface $config_factory,
     EntityTypeManagerInterface $entity_type_manager,
     ModuleHandlerInterface $module_handler,
-    GroupContentEnablerManagerInterface $group_content_plugin_manager
+    GroupRelationTypeManagerInterface $group_content_plugin_manager
   ) {
     parent::__construct($config_factory);
     $this->entityTypeManager = $entity_type_manager;
     $this->moduleHandler = $module_handler;
-    $this->groupContentPluginManager = $group_content_plugin_manager;
+    $this->groupRelationTypeManager = $group_content_plugin_manager;
   }
 
   /**
@@ -75,7 +73,7 @@ class SocialGroupSettings extends ConfigFormBase {
       $container->get('config.factory'),
       $container->get('entity_type.manager'),
       $container->get('module_handler'),
-      $container->get('plugin.manager.group_content_enabler')
+      $container->get('group_relation_type.manager')
     );
   }
 
@@ -105,11 +103,12 @@ class SocialGroupSettings extends ConfigFormBase {
       '#type' => 'checkboxes',
       '#title' => $this->t('Group permissions'),
       '#options' => [
-        'allow_group_create' => $this->t('Allow regular users to create new groups'),
-        'allow_group_selection_in_node' => $this->t('Allow regular users to change the group their content belong to'),
+        'allow_group_create' => $this->t('Allow verified users to create new groups'),
+        'allow_group_selection_in_node' => $this->t('Allow verified users to change the group their content belong to'),
         'address_visibility_settings' => $this->t('Only show the group address to the group members'),
       ],
       '#weight' => 10,
+      '#default_value' => [],
     ];
 
     foreach (array_keys($form['permissions']['#options']) as $permission) {
@@ -167,22 +166,6 @@ class SocialGroupSettings extends ConfigFormBase {
       ],
     ];
 
-    // Add an option for site manager to enable/disable option to choose group
-    // type on page to add flexible groups.
-    if (\Drupal::moduleHandler()->moduleExists('social_group_flexible_group')) {
-      $form['social_group_type_required'] = [
-        '#type' => 'checkbox',
-        '#title' => $this->t('Require group types'),
-        '#description' => $this->t('When checked, a new option will appear on
-          the flexible group form which requires group creators to select a
-          group type, this allows for a better categorisation of groups in your
-          community. You can add or edit the available group types @link', [
-            '@link' => Link::fromTextAndUrl('here.', Url::fromUserInput('/admin/structure/taxonomy/manage/group_type/overview'))->toString(),
-          ]),
-        '#default_value' => $config->get('social_group_type_required'),
-      ];
-    }
-
     return parent::buildForm($form, $form_state);
   }
 
@@ -229,7 +212,7 @@ class SocialGroupSettings extends ConfigFormBase {
       ]))
       : []
     );
-    $config->set('social_group_type_required', $form_state->getValue('social_group_type_required'));
+
     $config->save();
 
     Cache::invalidateTags(['group_view']);
@@ -285,7 +268,7 @@ class SocialGroupSettings extends ConfigFormBase {
     // Add possibility to add entity types from other modules.
     $this->moduleHandler->alter('social_group_cross_posting', $content_types);
 
-    $group_content_types = $this->groupContentPluginManager->getInstalledIds();
+    $group_content_types = $this->groupRelationTypeManager->getAllInstalledIds();
     foreach ($content_types as $bundle) {
       $plugin_id = 'group_node:' . $bundle;
       if (in_array($plugin_id, $group_content_types)) {

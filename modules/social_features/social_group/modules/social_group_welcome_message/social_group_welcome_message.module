@@ -9,7 +9,7 @@ use Drupal\Core\Entity\EntityTypeInterface;
 use Drupal\Core\Field\BaseFieldDefinition;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\Core\StringTranslation\TranslatableMarkup;
-use Drupal\group\Entity\GroupContentInterface;
+use Drupal\group\Entity\GroupRelationshipInterface;
 use Drupal\group\Entity\GroupInterface;
 
 /**
@@ -52,11 +52,7 @@ function social_group_welcome_message_entity_base_field_info(EntityTypeInterface
  * Implements hook_form_FORM_ID_alter().
  */
 function social_group_welcome_message_form_alter(array &$form, FormStateInterface $form_state, $form_id) {
-  $social_group_types = [
-    'open_group',
-    'closed_group',
-    'public_group',
-  ];
+  $social_group_types = [];
 
   \Drupal::moduleHandler()->alter('social_group_types', $social_group_types);
 
@@ -117,8 +113,8 @@ function social_group_welcome_message_form_alter(array &$form, FormStateInterfac
 /**
  * Implements hook_ENTITY_TYPE_insert().
  */
-function social_group_welcome_message_group_content_insert(GroupContentInterface $group_content) {
-  $type = $group_content->getContentPlugin()->getPluginId();
+function social_group_welcome_message_group_content_insert(GroupRelationshipInterface $group_content) {
+  $type = $group_content->getPluginId();
   $group = $group_content->getGroup();
 
   // If new membership is created.
@@ -216,9 +212,9 @@ function social_group_welcome_message_group_content_insert(GroupContentInterface
 }
 
 /**
- * Implements hook_field_widget_form_alter().
+ * Implements hook_field_widget_single_element_form_alter().
  */
-function social_group_welcome_message_field_widget_form_alter(&$element, FormStateInterface $form_state, $context) {
+function social_group_welcome_message_field_widget_single_element_form_alter(&$element, FormStateInterface $form_state, $context) {
   // Maps field names to an array containing a single format.
   $map = [
     'private_message_body' => ['basic_html'],

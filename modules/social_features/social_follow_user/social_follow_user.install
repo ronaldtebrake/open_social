@@ -5,6 +5,8 @@
  * Install, update and uninstall functions for the social_follow_user module.
  */
 
+use Drupal\Core\Entity\Entity\EntityFormDisplay;
+
 /**
  * Implements hook_install().
  *
@@ -24,4 +26,129 @@ function social_follow_user_install(): void {
   // Allow SM to configure visibility for Social Follow User feature.
   $permissions[] = 'administer social_follow_user settings';
   user_role_grant_permissions('sitemanager', $permissions);
+
+  // Add & apply user follow functionality.
+  // Display hero & statistic block on the following users/followers pages.
+  $config_names = [
+    'block.block.socialblue_profile_hero_block',
+    'block.block.socialblue_profile_statistic_block',
+  ];
+  foreach ($config_names as $config_name) {
+    $config = \Drupal::configFactory()->getEditable($config_name);
+
+    if (!empty($config->getRawData())) {
+      $pages = $config->get('visibility.request_path.pages');
+      $pages .= "\r\n/user/*/following/users";
+      $pages .= "\r\n/user/*/followers";
+      $config->set('visibility.request_path.pages', $pages);
+      $config->save();
+    }
+  }
+
+  // Add our settings field to the user settings form.
+  $form_mode = EntityFormDisplay::load("user.user.default");
+  if ($form_mode === NULL) {
+    throw new \RuntimeException("Default user form mode is missing, Drupal is not correctly installed.");
+  }
+  $form_mode->setComponent('field_allow_following', [
+    "type" => "boolean_checkbox",
+    "weight" => 3,
+    "region" => "content",
+    "settings" => [
+      "display_label" => TRUE,
+    ],
+    "third_party_settings" => [],
+  ]);
+  $privacy_group = $form_mode->getThirdPartySetting("field_group", "group_privacy");
+  if ($privacy_group !== NULL) {
+    if (empty($privacy_group['children'])) {
+      $privacy_group['children'] = [];
+    }
+    $privacy_group['children'][] = 'field_allow_following';
+  }
+  $form_mode->setThirdPartySetting("field_group", "group_privacy", $privacy_group);
+  $form_mode->save();
+}
+
+/**
+ * Implements hook_uninstall().
+ */
+function social_follow_user_uninstall(): void {
+  $config_factory = \Drupal::service('config.factory');
+
+  // Remove users follow fields.
+  foreach (['statistic', 'teaser'] as $display_id) {
+    $config = $config_factory->getEditable('core.entity_view_display.profile.profile.' . $display_id);
+    $config->clear('content.followers');
+    $config->clear('content.following');
+    $config->save();
+  }
+
+  // Delete follow user views.
+  $views = [
+    'views.view.followers_user',
+    'views.view.following_users',
+  ];
+  foreach ($views as $config) {
+    $config_factory->getEditable($config)->delete();
+  }
+
+  // Remove views urls from the visibility block rules.
+  $paths = [
+    '/user/*/following/users',
+    '/user/*/followers',
+  ];
+  $config_names = [
+    'block.block.socialblue_profile_hero_block',
+    'block.block.socialblue_profile_statistic_block',
+  ];
+  foreach ($config_names as $config_name) {
+    $config = $config_factory->getEditable($config_name);
+
+    if (!empty($config->getRawData())) {
+      $pages = $config->get('visibility.request_path.pages');
+      $pages = explode("\r\n", $pages ?? "");
+
+      foreach ($pages as $delta => $page) {
+        if (in_array($page, $paths)) {
+          unset($pages[$delta]);
+        }
+      }
+      $pages = implode("\r\n", $pages);
+      $config->set('visibility.request_path.pages', $pages);
+      $config->save();
+    }
+  }
+
+  // Cleanup settings.
+  \Drupal::configFactory()->getEditable('social_follow_user.settings')->delete();
+
+  // Remove fields.
+  $entity_type_manager = \Drupal::entityTypeManager();
+
+  // Delete field config.
+  /** @var \Drupal\field\FieldConfigStorage $field_config_storage */
+  $field_config_storage = $entity_type_manager->getStorage('field_config');
+
+  $field = $field_config_storage->load('user.user.field_allow_following');
+  if (!is_null($field)) {
+    $field->delete();
+  }
+
+  // Delete storage.
+  /** @var \Drupal\field\FieldStorageConfigStorage $field_storage_storage */
+  $field_storage_storage = $entity_type_manager->getStorage('field_storage_config');
+
+  /** @var \Drupal\field\FieldStorageConfigInterface|null $field_storage */
+  $field_storage = $field_storage_storage->load('user.field_allow_following');
+  if (!is_null($field_storage)) {
+    $field_storage->delete();
+  }
+}
+
+/**
+ * Implements hook_update_last_removed().
+ */
+function social_follow_user_update_last_removed() : int {
+  return 11702;
 }

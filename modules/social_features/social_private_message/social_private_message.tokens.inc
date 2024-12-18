@@ -14,6 +14,11 @@ use Drupal\Core\Url;
  */
 function social_private_message_tokens_alter(array &$replacements, array $context, BubbleableMetadata $bubbleable_metadata) {
   if ($context['type'] == 'message' && !empty($context['data']['message'])) {
+    // Translate hook_tokens options to the options for TranslatableMarkup.
+    $translation_options = [
+      'langcode' => $context['options']['langcode'] ?? NULL,
+    ];
+
     /** @var Drupal\message\Entity\Message $message */
     $message = $context['data']['message'];
 
@@ -43,9 +48,9 @@ function social_private_message_tokens_alter(array &$replacements, array $contex
                   ['private_message_thread' => $thread_id],
                   ['absolute' => TRUE]
                 );
-                $cta_button = $email_token_services->getCtaButton($thread_url, new TranslatableMarkup('Reply to this message'));
+                $cta_button = $email_token_services->getCtaButton($thread_url, new TranslatableMarkup('Reply to this message', [], $translation_options));
                 if (!empty($cta_button)) {
-                  $replacements[$context['tokens']['cta_button']] = \Drupal::service('renderer')->renderPlain($cta_button);
+                  $replacements[$context['tokens']['cta_button']] = \Drupal::service('renderer')->renderInIsolation($cta_button);
                 }
               }
 
@@ -55,7 +60,7 @@ function social_private_message_tokens_alter(array &$replacements, array $contex
                   '#theme' => 'message_post_comment_preview',
                   '#summary' => $private_message->getMessage(),
                 ];
-                $replacements[$context['tokens']['preview']] = \Drupal::service('renderer')->renderPlain($preview_info);
+                $replacements[$context['tokens']['preview']] = \Drupal::service('renderer')->renderInIsolation($preview_info);
               }
 
               break;

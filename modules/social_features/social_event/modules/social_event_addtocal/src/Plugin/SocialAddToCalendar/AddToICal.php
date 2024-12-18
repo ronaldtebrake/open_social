@@ -11,10 +11,10 @@ use Drupal\social_event_addtocal\Plugin\SocialAddToCalendarBase;
  *
  * @SocialAddToCalendar(
  *   id = "ical",
- *   label = @Translation("iCal"),
+ *   label = @Translation("iCalendar"),
  *   url = "social_event_addtocal.add_to_calendar_ics",
  *   dateFormat = "e:Ymd\THis",
- *   utcDateFormat = "e:Ymd\THis\Z"
+ *   utcDateFormat = "e:Ymd\THis"
  * )
  */
 class AddToICal extends SocialAddToCalendarBase {
@@ -30,6 +30,10 @@ class AddToICal extends SocialAddToCalendarBase {
         'target' => '_blank',
       ],
     ];
+
+    if (empty($this->pluginDefinition['url'])) {
+      return Url::fromRoute('<front>');
+    }
 
     return Url::fromRoute($this->pluginDefinition['url'], [], $options);
   }

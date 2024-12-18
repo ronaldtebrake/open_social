@@ -151,7 +151,7 @@ class EventAnEnrollController extends ControllerBase {
    * @param \Drupal\Core\Session\AccountInterface $account
    *   Run access checks for this account.
    *
-   * @return \Drupal\Core\Access\AccessResult
+   * @return \Drupal\Core\Access\AccessResultInterface
    *   Check standard and custom permissions.
    */
   public function enrollManageAccess(AccountInterface $account) {
@@ -159,9 +159,8 @@ class EventAnEnrollController extends ControllerBase {
       return AccessResult::allowed();
     }
     else {
-      /** @var \Drupal\node\Entity\Node $node */
       $node = $this->routeMatch->getParameter('node');
-      if (!is_null($node) && (!is_object($node))) {
+      if (is_string($node) || is_numeric($node)) {
         $node = $this->entityTypeManager
           ->getStorage('node')
           ->load($node);

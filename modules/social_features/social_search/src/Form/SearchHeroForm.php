@@ -93,9 +93,14 @@ class SearchHeroForm extends FormBase implements ContainerInjectionInterface {
    */
   public function submitForm(array &$form, FormStateInterface $form_state) {
     $current_route = $this->routeMatch->getRouteName();
-    $route_parts = explode('.', $current_route);
+    $route_parts = explode('.', ($current_route ?? ''));
 
     $query = UrlHelper::filterQueryParameters($this->requestStack->getCurrentRequest()->query->all());
+
+    // Unset the page parameter. When someone starts a new search query they
+    // should always start again at the first page.
+    unset($query['page']);
+
     $options = ['query' => $query];
     $parameters = [];
 

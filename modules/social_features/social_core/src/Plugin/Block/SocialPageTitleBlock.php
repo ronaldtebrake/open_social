@@ -9,8 +9,8 @@ use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
 use Drupal\Core\Routing\RouteMatchInterface;
+use Drupal\Core\Routing\RouteObjectInterface;
 use Drupal\node\NodeInterface;
-use Symfony\Cmf\Component\Routing\RouteObjectInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\HttpFoundation\RequestStack;
 use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
@@ -137,7 +137,7 @@ class SocialPageTitleBlock extends PageTitleBlock implements ContainerFactoryPlu
 
     // At this point the parameter could also be a simple string of a nid.
     // EG: on: /node/%node/enrollments.
-    if (!is_null($nid) && !is_object($nid)) {
+    if (is_numeric($nid)) {
       $node = $this->entityTypeManager->getStorage('node')->load($nid);
     }
 
@@ -169,7 +169,10 @@ class SocialPageTitleBlock extends PageTitleBlock implements ContainerFactoryPlu
       ], $route_names))) {
         $translation = $this->entityRepository->getTranslationFromContext($node);
 
-        if ($translation instanceof NodeInterface) {
+        if (
+          $translation instanceof NodeInterface &&
+          !is_null($translation->getTitle())
+        ) {
           $node->setTitle($translation->getTitle());
         }
 
@@ -184,7 +187,13 @@ class SocialPageTitleBlock extends PageTitleBlock implements ContainerFactoryPlu
     }
     else {
       if ($route = $request->attributes->get(RouteObjectInterface::ROUTE_OBJECT)) {
-        $this->setTitle($this->titleResolver->getTitle($request, $route));
+        $title = $this->titleResolver->getTitle($request, $route);
+
+        // Deal with different return types for getTitle().
+        if (is_null($title)) {
+          $title = '';
+        }
+        $this->setTitle($title);
       }
       else {
         $this->setTitle('');

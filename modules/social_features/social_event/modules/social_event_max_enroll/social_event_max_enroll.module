@@ -31,8 +31,16 @@ function social_event_max_enroll_views_post_render(ViewExecutable $view, &$outpu
     if ($event_max_enroll_service->isEnabled($node)) {
       // Count how many spots left.
       $left = $event_max_enroll_service->getEnrollmentsLeft($node);
-      $title_suffix = \Drupal::translation()->formatPlural($left, '(1 spot left)', '(@count spots left)');
-      $view->header['result']->options['content'] .= ' ' . $title_suffix;
+      $title_suffix = \Drupal::translation()
+        ->formatPlural($left, '(1 spot left)', '(@count spots left)');
+      // Social_event_update_121001 changed 'result' to 'area_text_custom'
+      // Add backwards compatibility, in case of update hook failure.
+      if (isset($view->header['area_text_custom'])) {
+        $view->header['area_text_custom']->options['content'] .= ' ' . $title_suffix;
+      }
+      if (isset($view->header['result'])) {
+        $view->header['result']->options['content'] .= ' ' . $title_suffix;
+      }
     }
   }
 }
@@ -146,12 +154,19 @@ function social_event_max_enroll_form_alter(&$form, FormStateInterface $form_sta
           // there are no more spots left, exception for the owner or organizer.
           if (!$enrollments && !$an_enrollments && social_event_manager_or_organizer() === FALSE) {
             if ($form_id === 'enroll_action_form' || $form_id === 'event_invite_enroll_action_form') {
-              $form['enroll_for_this_event']['#type'] = 'submit';
-              $form['enroll_for_this_event']['#value'] = t('No spots left');
-              $form['enroll_for_this_event']['#disabled'] = TRUE;
+              if (isset($form['enroll_wrapper'])) {
+                $form['enroll_wrapper']['enroll_for_this_event']['#type'] = 'submit';
+                $form['enroll_wrapper']['enroll_for_this_event']['#value'] = t('No spots left');
+                $form['enroll_wrapper']['enroll_for_this_event']['#disabled'] = TRUE;
+              }
+              else {
+                $form['enroll_for_this_event']['#type'] = 'submit';
+                $form['enroll_for_this_event']['#value'] = t('No spots left');
+                $form['enroll_for_this_event']['#disabled'] = TRUE;
+              }
             }
             elseif ($form_id === 'event_an_enroll_action_form' && !isset($form['enroll_for_this_event'])) {
-              $form['event_enrollment'] = [
+              $enrolment_button = [
                 '#type' => 'submit',
                 '#value' => t('No spots left'),
                 '#disabled' => TRUE,
@@ -166,6 +181,12 @@ function social_event_max_enroll_form_alter(&$form, FormStateInterface $form_sta
                   ],
                 ],
               ];
+              if (isset($form['enroll_wrapper'])) {
+                $form['enroll_wrapper']['event_enrollment'] = $enrolment_button;
+              }
+              else {
+                $form['event_enrollment'] = $enrolment_button;
+              }
             }
           }
         }
@@ -187,9 +208,9 @@ function social_event_max_enroll_node_presave(EntityInterface $entity) {
 }
 
 /**
- * Implements hook_field_widget_form_alter().
+ * Implements hook_field_widget_single_element_form_alter().
  */
-function social_event_max_enroll_field_widget_form_alter(&$element, FormStateInterface $form_state, $context) {
+function social_event_max_enroll_field_widget_single_element_form_alter(&$element, FormStateInterface $form_state, $context) {
   $field_definition = $context['items']->getFieldDefinition();
   if ($field_definition->getName() === 'field_event_max_enroll_num') {
     $element['value']['#title_display'] = 'none';

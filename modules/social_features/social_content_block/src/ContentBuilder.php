@@ -12,7 +12,10 @@ use Drupal\Core\Entity\EntityTypeInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Field\EntityReferenceFieldItemListInterface;
 use Drupal\Core\Form\FormStateInterface;
+use Drupal\Core\Language\LanguageInterface;
+use Drupal\Core\Language\LanguageManagerInterface;
 use Drupal\Core\Link;
+use Drupal\Core\Session\AccountInterface;
 use Drupal\Core\StringTranslation\StringTranslationTrait;
 use Drupal\Core\StringTranslation\TranslationInterface;
 use Drupal\Core\Url;
@@ -27,6 +30,13 @@ class ContentBuilder implements ContentBuilderInterface {
   use StringTranslationTrait;
 
   /**
+   * User account entity.
+   *
+   * @var \Drupal\Core\Session\AccountInterface
+   */
+  protected AccountInterface $account;
+
+  /**
    * The entity type manager.
    */
   protected EntityTypeManagerInterface $entityTypeManager;
@@ -35,6 +45,13 @@ class ContentBuilder implements ContentBuilderInterface {
    * The current active database's master connection.
    */
   protected Connection $connection;
+
+  /**
+   * Language manager.
+   *
+   * @var \Drupal\Core\Language\LanguageManagerInterface
+   */
+  protected $languageManager;
 
   /**
    * The content block manager.
@@ -52,19 +69,40 @@ class ContentBuilder implements ContentBuilderInterface {
   protected TimeInterface $time;
 
   /**
-   * {@inheritdoc}
+   * ContentBuilder constructor.
+   *
+   * @param \Drupal\Core\Session\AccountInterface $account
+   *   User account entity.
+   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
+   *   The entity type manager.
+   * @param \Drupal\Core\Database\Connection $connection
+   *   The current active database's master connection.
+   * @param \Drupal\Core\StringTranslation\TranslationInterface $string_translation
+   *   The string translation.
+   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
+   *   The language manager.
+   * @param \Drupal\social_content_block\ContentBlockManagerInterface $content_block_manager
+   *   The content block manager.
+   * @param \Drupal\Core\Entity\EntityRepositoryInterface $entity_repository
+   *   The entity repository.
+   * @param \Drupal\Component\Datetime\TimeInterface $time
+   *   The time service.
    */
   public function __construct(
+    AccountInterface $account,
     EntityTypeManagerInterface $entity_type_manager,
     Connection $connection,
     TranslationInterface $string_translation,
+    LanguageManagerInterface $language_manager,
     ContentBlockManagerInterface $content_block_manager,
     EntityRepositoryInterface $entity_repository,
     TimeInterface $time
   ) {
+    $this->account = $account;
     $this->entityTypeManager = $entity_type_manager;
     $this->connection = $connection;
     $this->setStringTranslation($string_translation);
+    $this->languageManager = $language_manager;
     $this->contentBlockManager = $content_block_manager;
     $this->entityRepository = $entity_repository;
     $this->time = $time;
@@ -73,7 +111,7 @@ class ContentBuilder implements ContentBuilderInterface {
   /**
    * {@inheritdoc}
    */
-  public static function trustedCallbacks() {
+  public static function trustedCallbacks(): array {
     return ['getEntities', 'build'];
   }
 
@@ -86,95 +124,99 @@ class ContentBuilder implements ContentBuilderInterface {
       ->load($block_id);
 
     $plugin_id = $block_content->field_plugin_id->getValue()[0]['value'];
-    $definition = $this->contentBlockManager->getDefinition($plugin_id);
-
-    // When the user didn't select any filter in the "Content selection" field
-    // then the block base query will be built based on all filled filterable
-    // fields.
-    if (($field = $block_content->field_plugin_field)->isEmpty()) {
-      // It could be that the plugin supports more fields than are currently
-      // available, those are removed.
-      $field_names = array_filter(
-        $definition['fields'],
-        static function ($field_name) use ($block_content) {
-          return $block_content->hasField($field_name);
-        }
-      );
-    }
-    // When the user selected some filter in the "Content selection" field then
-    // only condition based on this filter field will be added to the block base
-    // query.
-    else {
-      $field_names = array_column($field->getValue(), 'value');
-    }
-
-    $fields = [];
-
-    foreach ($field_names as $field_name) {
-      $field = $block_content->get($field_name);
-
-      if (!$field->isEmpty()) {
-        $fields[$field_name] = $field->getValue();
-
-        // Make non-empty entity reference fields easier to use.
-        if ($field instanceof EntityReferenceFieldItemListInterface) {
-          $fields[$field_name] = array_column($fields[$field_name], 'target_id');
-        }
-      }
-    }
-
-    /** @var \Drupal\Core\Entity\EntityTypeInterface $entity_type */
-    $entity_type = $this->entityTypeManager->getDefinition($definition['entityTypeId']);
-
-    $table = $entity_type->getDataTable();
-    if (!empty($table) && is_string($table)) {
-      $query = $this->connection->select($table, 'base_table')
-        ->addTag('social_content_block')
-        ->addMetaData('block_content', $block_content)
-        ->fields('base_table', [$entity_type->getKey('id')]);
-
-      if (isset($definition['bundle'])) {
-        $query->condition(
-          'base_table.' . $entity_type->getKey('bundle'),
-          $definition['bundle']
+    if ($definition = $this->contentBlockManager->getDefinition($plugin_id)) {
+      // When the user didn't select any filter in the "Content selection" field
+      // then the block base query will be built based on all filled filterable
+      // fields.
+      if (($field = $block_content->field_plugin_field)->isEmpty()) {
+        // It could be that the plugin supports more fields than are currently
+        // available, those are removed.
+        $field_names = array_filter(
+          $definition['fields'],
+          static function ($field_name) use ($block_content) {
+            return $block_content->hasField($field_name);
+          }
         );
       }
-
-      $plugin = $this->contentBlockManager->createInstance($plugin_id);
-
-      if ($fields) {
-        $plugin->query($query, $fields);
+      // When the user selected some filter in the "Content selection" field
+      // then only condition based on this filter field will be added to the
+      // block base query.
+      else {
+        $field_names = array_column($field->getValue(), 'value');
       }
 
-      // Apply our sorting logic.
-      $this->sortBy($query, $entity_type, $block_content, $plugin->supportedSortOptions());
+      $fields = [];
 
-      // Add range.
-      $query->range(0, $block_content->field_item_amount->value);
+      foreach ($field_names as $field_name) {
+        $field = $block_content->get($field_name);
 
-      // Execute the query to get the results.
-      $result = $query->execute();
-      $entities = $result !== NULL ? $result->fetchAllKeyed(0, 0) : NULL;
+        if (!$field->isEmpty()) {
+          $fields[$field_name] = $field->getValue();
 
-      if ($entities) {
-        // Load all the topics so we can give them back.
-        $entities = $this->entityTypeManager
-          ->getStorage($definition['entityTypeId'])
-          ->loadMultiple($entities);
-
-        foreach ($entities as $key => $entity) {
-          if ($entity->access('view') === FALSE) {
-            unset($entities[$key]);
-          }
-          else {
-            // Get entity translation if exists.
-            $entities[$key] = $this->entityRepository->getTranslationFromContext($entity);
+          // Make non-empty entity reference fields easier to use.
+          if ($field instanceof EntityReferenceFieldItemListInterface) {
+            $fields[$field_name] = array_column($fields[$field_name], 'target_id');
           }
         }
+      }
 
-        return $this->entityTypeManager
-          ->getViewBuilder($definition['entityTypeId'])
-          ->viewMultiple($entities, 'small_teaser');
+      /** @var \Drupal\Core\Entity\EntityTypeInterface $entity_type */
+      $entity_type = $this->entityTypeManager->getDefinition($definition['entityTypeId']);
+
+      $langcode = $this->languageManager->getCurrentLanguage(LanguageInterface::TYPE_CONTENT)->getId();
+
+      $table = $entity_type->getDataTable();
+      if (!empty($table) && is_string($table)) {
+        $query = $this->connection->select($table, 'base_table')
+          ->addTag('social_content_block')
+          ->addTag($entity_type->id() . '_access')
+          ->addMetaData('block_content', $block_content)
+          ->fields('base_table', [$entity_type->getKey('id')])
+          ->condition('base_table.langcode', $langcode);
+
+        if (isset($definition['bundle'])) {
+          $query->condition(
+            'base_table.' . $entity_type->getKey('bundle'),
+            $definition['bundle']
+          );
+        }
+
+        $plugin = $this->contentBlockManager->createInstance($plugin_id);
+
+        if ($fields) {
+          $plugin->query($query, $fields);
+        }
+
+        // Apply our sorting logic.
+        $this->sortBy($query, $entity_type, $block_content, $plugin->supportedSortOptions());
+        // Add range.
+        $query->range(0, $block_content->field_item_amount->value);
+
+        // Execute the query to get the results.
+        $result = $query->execute();
+        $entities = $result !== NULL ? $result->fetchAllKeyed(0, 0) : NULL;
+
+        if ($entities) {
+          // Load all the topics so we can give them back.
+          $entities = $this->entityTypeManager
+            ->getStorage($definition['entityTypeId'])
+            ->loadMultiple($entities);
+
+          foreach ($entities as $key => $entity) {
+            // @todo Better to move to entity query check but
+            // it doesn't work correctly for flexible groups.
+            if (!$entity->access('view', $this->account)) {
+              unset($entities[$key]);
+              continue;
+            }
+
+            $entities[$key] = $this->entityRepository->getTranslationFromContext($entity);
+          }
+
+          return $this->entityTypeManager
+            ->getViewBuilder($definition['entityTypeId'])
+            ->viewMultiple($entities, 'small_teaser');
+        }
       }
     }
 
@@ -333,9 +375,8 @@ class ContentBuilder implements ContentBuilderInterface {
       }
     }
 
-    $field = $element['field_sorting']['#group'];
-    $element[$field]['#prefix'] = '<div id="' . $element['field_plugin_id']['widget'][0]['value']['#ajax']['wrapper'] . '">';
-    $element[$field]['#suffix'] = '</div>';
+    $element['field_sorting']['#prefix'] = '<div id="' . $element['field_plugin_id']['widget'][0]['value']['#ajax']['wrapper'] . '">';
+    $element['field_sorting']['#suffix'] = '</div>';
 
     if (!$selected_plugin) {
       return $element;
@@ -364,6 +405,7 @@ class ContentBuilder implements ContentBuilderInterface {
     }
 
     $element['field_sorting']['widget']['#options'] = $options;
+    $element['field_sorting']['widget']['#process'][] = [static::class, 'processSortOptions'];
 
     $selector = $content_block_manager->getSelector('field_sorting', NULL, $element);
 
@@ -382,12 +424,50 @@ class ContentBuilder implements ContentBuilderInterface {
   }
 
   /**
+   * Helps to rebuild values for "field_sorting" form element.
+   *
+   * @param array $element
+   *   The "field_sorting" form element.
+   * @param \Drupal\Core\Form\FormStateInterface $form_state
+   *   The form state object.
+   * @param array $complete_form
+   *   The form build array.
+   *
+   * @return array
+   *   The element array.
+   */
+  public static function processSortOptions(array $element, FormStateInterface $form_state, array &$complete_form): array {
+    $sort_value = is_array($element['#value'])
+      ? $element['#value'][0] ?? NULL
+      : $element['#value'];
+
+    $options = $element['#options'];
+    // If the current value isn't in the options list, we will have an error on
+    // default value element validation. Here we reassign value with the first
+    // option.
+    /* @see \Drupal\Core\Form\FormValidator::performRequiredValidation() */
+    if ($sort_value === NULL || !isset($options[$sort_value])) {
+      $new_sort_value = is_array($element['#value'])
+        ? [key($options)]
+        : key($options);
+
+      $form_state->setValue($element['#parents'], $new_sort_value);
+      $element['#value'] = $new_sort_value;
+    }
+
+    return $element;
+  }
+
+  /**
    * {@inheritdoc}
    */
-  public function updateFormSortingOptions(array $form, FormStateInterface $form_state): array {
+  public static function updateFormSortingOptions(array $form, FormStateInterface $form_state): array {
     $parents = ['field_sorting'];
 
-    if ($form_state->has('layout_builder__component')) {
+    if (
+      $form_state->has('layout_builder__component') ||
+      str_contains($form_state->getValue('form_id'), 'layout_builder')
+    ) {
       $parents = array_merge(['settings', 'block_form'], $parents);
     }
 
@@ -401,15 +481,7 @@ class ContentBuilder implements ContentBuilderInterface {
     );
 
     if ($sort_value === NULL || !isset($options[$sort_value])) {
-      // Unfortunately this has already triggered a validation error.
-      $form_state->clearErrors();
       $form_state->setValue($value_parents, key($options));
-    }
-
-    $parents = [NestedArray::getValue($form, array_merge($parents, ['#group']))];
-
-    if ($form_state->has('layout_builder__component')) {
-      $parents = array_merge(['settings', 'block_form'], $parents);
     }
 
     return NestedArray::getValue($form, $parents);
@@ -464,7 +536,7 @@ class ContentBuilder implements ContentBuilderInterface {
       case 'most_commented':
         if ($is_group) {
           $post_alias = $query->leftJoin('post__field_recipient_group', 'pfrg', "$base_field = %alias.field_recipient_group_target_id");
-          $group_alias = $query->leftJoin('group_content_field_data', 'gfd', "$base_field = %alias.gid AND %alias.type LIKE '%-group_node-%'");
+          $group_alias = $query->leftJoin('group_relationship_field_data', 'gfd', "$base_field = %alias.gid AND %alias.type LIKE '%-group_node-%'");
           $comment_alias = $query->leftJoin('comment_field_data', 'cfd', "$post_alias.entity_id = %alias.entity_id AND %alias.entity_type = 'post' OR $group_alias.entity_id = %alias.entity_id AND %alias.entity_type = 'node'");
         }
         // Otherwise, only check direct votes.
@@ -478,7 +550,7 @@ class ContentBuilder implements ContentBuilderInterface {
       case 'last_commented':
         if ($is_group) {
           $post_alias = $query->leftJoin('post__field_recipient_group', 'pfrg', "$base_field = %alias.field_recipient_group_target_id");
-          $group_alias = $query->leftJoin('group_content_field_data', 'gfd', "$base_field = %alias.gid AND %alias.type LIKE '%-group_node-%'");
+          $group_alias = $query->leftJoin('group_relationship_field_data', 'gfd', "$base_field = %alias.gid AND %alias.type LIKE '%-group_node-%'");
           $comment_alias = $query->leftJoin('comment_field_data', 'cfd', "$post_alias.entity_id = %alias.entity_id AND %alias.entity_type = 'post' OR $group_alias.entity_id = %alias.entity_id AND %alias.entity_type = 'node'");
         }
         else {
@@ -496,7 +568,7 @@ class ContentBuilder implements ContentBuilderInterface {
         // content entities.
         if ($is_group) {
           $post_alias = $query->leftJoin('post__field_recipient_group', 'pfrg', "$base_field = %alias.field_recipient_group_target_id");
-          $group_alias = $query->leftJoin('group_content_field_data', 'gfd', "$base_field = %alias.gid AND %alias.type LIKE '%-group_node-%'");
+          $group_alias = $query->leftJoin('group_relationship_field_data', 'gfd', "$base_field = %alias.gid AND %alias.type LIKE '%-group_node-%'");
           $vote_alias = $query->leftJoin('votingapi_vote', 'vv', "$post_alias.entity_id = %alias.entity_id AND %alias.entity_type = 'post' OR $group_alias.entity_id = %alias.entity_id AND %alias.entity_type = 'node'");
         }
         // Otherwise, only check direct votes.
@@ -512,7 +584,7 @@ class ContentBuilder implements ContentBuilderInterface {
       // that as sort value.
       case 'last_interacted':
         if ($is_group) {
-          $group_alias = $query->leftJoin('group_content_field_data', 'gfd', "$base_field = %alias.gid");
+          $group_alias = $query->leftJoin('group_relationship_field_data', 'gfd', "$base_field = %alias.gid");
           $group_post_alias = $query->leftjoin('post__field_recipient_group', 'pst', "$base_field = %alias.field_recipient_group_target_id");
           $post_alias = $query->leftjoin('post_field_data', 'pfd', "$group_post_alias.entity_id = %alias.id");
           $comment_alias = $query->leftjoin('comment_field_data', 'cfd', "$post_alias.id = %alias.entity_id AND %alias.entity_type = 'post'");
@@ -545,7 +617,7 @@ class ContentBuilder implements ContentBuilderInterface {
       case 'trending':
         if ($is_group) {
           $post_alias = $query->leftJoin('post__field_recipient_group', 'pfrg', "$base_field = %alias.field_recipient_group_target_id");
-          $group_alias = $query->leftJoin('group_content_field_data', 'gfd', "$base_field = %alias.gid AND %alias.type LIKE '%-group_node-%'");
+          $group_alias = $query->leftJoin('group_relationship_field_data', 'gfd', "$base_field = %alias.gid AND %alias.type LIKE '%-group_node-%'");
           $comment_alias = $query->leftJoin('comment_field_data', 'cfd', "$post_alias.entity_id = %alias.entity_id AND %alias.entity_type = 'post' OR $group_alias.entity_id = %alias.entity_id AND %alias.entity_type = 'node'");
           $vote_alias = $query->leftJoin('votingapi_vote', 'vv', "$post_alias.entity_id = %alias.entity_id AND %alias.entity_type = 'post' OR $group_alias.entity_id = %alias.entity_id AND %alias.entity_type = 'node'");
         }
@@ -587,6 +659,7 @@ class ContentBuilder implements ContentBuilderInterface {
         $query->condition($conditions);
       }
 
+      /** @var array<array|string> $option */
       $option = $options[$sort_by];
 
       if (

@@ -5,9 +5,10 @@ namespace Drupal\social_magic_login\Controller;
 use Drupal\Component\Utility\Crypt;
 use Drupal\Core\Config\ConfigFactory;
 use Drupal\Core\Controller\ControllerBase;
-use Drupal\Core\Extension\ModuleHandler;
+use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\Core\Link;
 use Drupal\Core\Url;
+use Drupal\user\UserInterface;
 use Drupal\user\UserStorageInterface;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
@@ -24,21 +25,21 @@ class MagicLoginController extends ControllerBase {
    *
    * @var \Drupal\user\UserStorageInterface
    */
-  protected $userStorage;
+  protected UserStorageInterface $userStorage;
 
   /**
    * The logger service.
    *
    * @var \Psr\Log\LoggerInterface
    */
-  protected $logger;
+  protected LoggerInterface $logger;
 
   /**
    * The config.
    *
    * @var \Drupal\Core\Config\ConfigFactory
    */
-  public $config;
+  public ConfigFactory $config;
 
   /**
    * MagicLoginController constructor.
@@ -47,12 +48,12 @@ class MagicLoginController extends ControllerBase {
    *   The user storage.
    * @param \Psr\Log\LoggerInterface $logger
    *   The logger service.
-   * @param \Drupal\Core\Extension\ModuleHandler $module_handler
+   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
    *   The module handler service.
    * @param \Drupal\Core\Config\ConfigFactory $config
    *   The configuration.
    */
-  public function __construct(UserStorageInterface $user_storage, LoggerInterface $logger, ModuleHandler $module_handler, ConfigFactory $config) {
+  public function __construct(UserStorageInterface $user_storage, LoggerInterface $logger, ModuleHandlerInterface $module_handler, ConfigFactory $config) {
     $this->userStorage = $user_storage;
     $this->logger = $logger;
     $this->moduleHandler = $module_handler;
@@ -89,10 +90,9 @@ class MagicLoginController extends ControllerBase {
    * @see \Drupal\user\Controller\UserController::resetPassLogin
    */
   public function login($uid, $timestamp, $hash, $destination): ?RedirectResponse {
-    /** @var \Drupal\user\UserInterface $user */
     $user = $this->userStorage->load($uid);
     // Verify that the user exists and is active.
-    if ($user === NULL || !$user->isActive() || $user->isAnonymous()) {
+    if (!$user instanceof UserInterface || !$user->isActive() || $user->isAnonymous()) {
       throw new AccessDeniedHttpException();
     }
 
@@ -143,13 +143,13 @@ class MagicLoginController extends ControllerBase {
     // When the user hasn't set a password, redirect the user to
     // the set passwords page. This now includes users that have
     // registered through social login possibilities.
-    if (NULL === $user->getPassword()) {
+    if ($user->get('pass')->isEmpty()) {
       $message_set_password = $this->t('You need to set your password in order to log in.');
       if ($this->dataPolicyConsensus()) {
         // Set a different text when the user still needs to comply to
         // the data policy.
         $link = Link::createFromRoute($this->t('here'), 'data_policy.data_policy.agreement', [], ['query' => ["destination" => $destination]]);
-        $message_set_password = $this->t('We published a new version of the data policy. You can review the data policy @url.', [
+        $message_set_password = $this->t('We published a new version of the data protection statement. You can review the data protection statement @url.', [
           '@url' => $link->toString(),
         ]);
       }

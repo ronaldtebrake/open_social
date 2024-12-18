@@ -4,7 +4,7 @@ namespace Drupal\social_group_members_export\Plugin\Action;
 
 use Drupal\Core\Access\AccessResult;
 use Drupal\Core\Session\AccountInterface;
-use Drupal\group\Entity\GroupContentInterface;
+use Drupal\group\Entity\GroupRelationshipInterface;
 use Drupal\social_user_export\Plugin\Action\ExportUser;
 
 /**
@@ -23,19 +23,19 @@ class ExportMember extends ExportUser {
    * {@inheritdoc}
    */
   public function executeMultiple(array $entities) {
-    /** @var \Drupal\group\Entity\GroupContentInterface $entity */
+    /** @var \Drupal\group\Entity\GroupRelationshipInterface $entity */
     foreach ($entities as &$entity) {
       $entity = $entity->getEntity();
     }
 
-    parent::executeMultiple($entities);
+    return parent::executeMultiple($entities);
   }
 
   /**
    * {@inheritdoc}
    */
   public function access($object, AccountInterface $account = NULL, $return_as_object = FALSE) {
-    if ($object instanceof GroupContentInterface && $object->getContentPlugin()->getPluginId() === 'group_membership') {
+    if ($object instanceof GroupRelationshipInterface && $object->getPluginId() === 'group_membership') {
       $access = $object->getEntity()->access('view', $account, TRUE);
     }
     else {
@@ -54,8 +54,7 @@ class ExportMember extends ExportUser {
    * @see social_user_export_file_download()
    */
   protected function generateFilePath() : string {
-    $hash = md5(microtime(TRUE));
-    return 'export-members-' . substr($hash, 20, 12) . '.csv';
+    return 'export-members-' . bin2hex(random_bytes(8)) . '.csv';
   }
 
 }

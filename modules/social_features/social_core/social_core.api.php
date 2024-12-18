@@ -23,17 +23,47 @@ function hook_social_filter_format_default_alter(&$filter_format) {
 }
 
 /**
- * Provide a method to alter the article for a node. If it's a, or an or the.
+ * Provide a method to insert an article in the page title.
  *
- * @param array $node_types
- *   The filter format that is default.
+ * @return array
+ *   An associative array of titles configuration. The keys are entity types.
+ *   The values are associative arrays that may contain the following elements:
+ *   - route_name: The route name of the page which title should be replaced.
+ *   - bundles: (optional) An associative array of articles, keyed by bundle
+ *     name.
+ *   - callback: (optional) The function should return the config entity object
+ *     of an entity type.
+ *
+ * @see \Drupal\social_core\Routing\RouteSubscriber::alterRoutes()
+ * @see \Drupal\social_core\Controller\SocialCoreController::addPageTitle()
  *
  * @ingroup social_core_api
  */
-function hook_social_node_title_prefix_articles_alter(array &$node_types) {
-  // The default is set to a.
-  // See SocialCoreController::addPageTitle for example.
-  $node_types['discussions'] = 'an';
+function hook_social_core_title() {
+  return [
+    'node' => [
+      'route_name' => 'node.add',
+      'bundles' => [
+        'article' => 'an',
+      ],
+    ],
+  ];
+}
+
+/**
+ * Alter configuration of titles.
+ *
+ * @param array $titles
+ *   An associative array of titles configuration returned by
+ *   hook_social_core_title().
+ *
+ * @see \Drupal\social_core\Routing\RouteSubscriber::alterRoutes()
+ * @see \Drupal\social_core\Controller\SocialCoreController::addPageTitle()
+ *
+ * @ingroup social_core_api
+ */
+function hook_social_core_title_alter(array &$titles) {
+  $titles['node']['bundles']['event'] = 'an';
 }
 
 /**
@@ -109,15 +139,15 @@ function hook_social_content_type_alter(array &$page_to_exclude) {
 }
 
 /**
- * Provide method to allows extensions to use the new content style on a node.
+ * Provide a method to alter new content style on an entity.
  *
  * @param array $compatible_content_type_forms
- *   Array of the nodes.
+ *   Array of the form identifiers.
  *
- * @see social_core_form_node_form_alter()
+ * @see social_core_form_alter()
  * @ingroup social_core_api
  */
-function hook_social_core_compatible_content_forms(array &$compatible_content_type_forms) {
+function hook_social_core_compatible_content_forms_alter(array &$compatible_content_type_forms) {
   $compatible_content_type_forms[] = 'node_landing_page_form';
 }
 
@@ -150,3 +180,39 @@ function hook_social_core_default_main_menu_links_alter(array &$links) {
 /**
  * @} End of "defaultmainmenulinks hooks".
  */
+
+/**
+ * Act on an entity being published.
+ *
+ * This hook is fired when an entity's status is changed to "published."
+ * It works for any entity type that has a `status` field, such as nodes or
+ * taxonomy terms. The hook is dynamically invoked based on the entity type.
+ * For example:
+ * - hook_social_core_node_published() for nodes
+ * - hook_social_core_taxonomy_term_published() for taxonomy terms.
+ *
+ * @param \Drupal\Core\Entity\EntityInterface $entity
+ *   The entity being published.
+ *
+ * @ingroup hooks
+ */
+function hook_social_core_ENTITY_TYPE_published(\Drupal\Core\Entity\EntityInterface $entity) {
+}
+
+/**
+ * Act on an entity being unpublished.
+ *
+ * This hook is fired when an entity's status is changed to "unpublished."
+ * It works for any entity type that has a `status` field, such as nodes or
+ * taxonomy terms. The hook is dynamically invoked based on the entity type.
+ * For example:
+ * - hook_social_core_node_unpublished() for nodes
+ * - hook_social_core_taxonomy_term_unpublished() for taxonomy terms.
+ *
+ * @param \Drupal\Core\Entity\EntityInterface $entity
+ *   The entity being unpublished.
+ *
+ * @ingroup hooks
+ */
+function hook_social_core_ENTITY_TYPE_unpublished(\Drupal\Core\Entity\EntityInterface $entity) {
+}

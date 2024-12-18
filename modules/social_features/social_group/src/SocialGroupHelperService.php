@@ -7,14 +7,16 @@ use Drupal\Core\Database\Connection;
 use Drupal\Core\Entity\ContentEntityInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Extension\ModuleHandlerInterface;
+use Drupal\Core\Render\RendererInterface;
 use Drupal\Core\Session\AccountInterface;
 use Drupal\Core\StringTranslation\StringTranslationTrait;
 use Drupal\Core\StringTranslation\TranslationInterface;
 use Drupal\Core\Url;
-use Drupal\group\Entity\GroupContent;
-use Drupal\group\Entity\GroupContentInterface;
-use Drupal\group\Entity\GroupContentType;
+use Drupal\group\Entity\GroupRelationship;
+use Drupal\group\Entity\GroupRelationshipInterface;
+use Drupal\group\Entity\GroupRelationshipType;
 use Drupal\group\Entity\GroupInterface;
+use Drupal\social_group\Element\SocialGroupEntityAutocomplete;
 use Drupal\social_post\Entity\PostInterface;
 
 /**
@@ -55,33 +57,73 @@ class SocialGroupHelperService implements SocialGroupHelperServiceInterface {
   private $entityTypeManager;
 
   /**
+   * The renderer.
+   */
+  private RendererInterface $renderer;
+
+  /**
    * {@inheritdoc}
    */
   public function __construct(
     Connection $connection,
     ModuleHandlerInterface $module_handler,
     TranslationInterface $translation,
-    EntityTypeManagerInterface $entity_type_manager
+    EntityTypeManagerInterface $entity_type_manager,
+    RendererInterface $renderer
   ) {
     $this->database = $connection;
     $this->moduleHandler = $module_handler;
     $this->setStringTranslation($translation);
     $this->entityTypeManager = $entity_type_manager;
+    $this->renderer = $renderer;
   }
 
   /**
    * {@inheritdoc}
    */
-  public function getGroupFromEntity(array $entity, bool $read_cache = TRUE) {
+  public function description(string $key, string $hook): string {
+    $description = '';
+
+    // We need it to be specified otherwise we can't build the markup.
+    if (empty($key)) {
+      return $description;
+    }
+
+    // Allow modules to provide their own markup for a given key in the
+    // visibility #options array.
+    $this->moduleHandler->alter($hook, $key, $description);
+
+    if (is_array($description)) {
+      $element = [
+        '#theme' => 'visibility',
+        '#name' => $key,
+      ];
+
+      foreach ($description as $field => $item) {
+        $element['#' . $field] = $item;
+      }
+
+      $description = $this->renderer->render($element);
+    }
+
+    return $description;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function getGroupFromEntity(array $entity, bool $read_cache = TRUE): ?int {
+    if ($entity['target_id'] === NULL) {
+      return NULL;
+    }
+
     // Comments can have groups based on what the comment is posted on so the
     // cache type differs from what we later used to fetch the group.
-    $cache_type = $entity['target_type'];
-    $cache_id = $entity['target_id'];
+    $cache_type = $entity_type = $entity['target_type'];
+    $cache_id = $entity_id = $entity['target_id'];
 
     if (
       $read_cache &&
-      is_array($this->cache) &&
-      is_array($this->cache[$cache_type]) &&
       isset($this->cache[$cache_type][$cache_id])
     ) {
       return $this->cache[$cache_type][$cache_id];
@@ -89,56 +131,56 @@ class SocialGroupHelperService implements SocialGroupHelperServiceInterface {
 
     // Special cases for comments.
     // Returns the entity to which the comment is attached.
-    if ($entity['target_type'] === 'comment') {
+    if ($entity_type === 'comment') {
       $comment = $this->entityTypeManager->getStorage('comment')
-        ->load($entity['target_id']);
+        ->load($entity_id);
 
       if (
         $comment instanceof CommentInterface &&
         ($commented_entity = $comment->getCommentedEntity()) !== NULL
       ) {
-        $entity['target_type'] = $commented_entity->getEntityTypeId();
-        $entity['target_id'] = $commented_entity->id();
+        $entity_type = $commented_entity->getEntityTypeId();
+        $entity_id = $commented_entity->id();
       }
       else {
-        $entity['target_type'] = NULL;
+        $entity_type = NULL;
       }
     }
 
     $gid = NULL;
 
-    if ($entity['target_type'] === 'post') {
-      $post = $this->entityTypeManager->getStorage('post')
-        ->load($entity['target_id']);
+    if ($entity_type === 'post') {
+      $post = $this->entityTypeManager->getStorage('post')->load($entity_id);
 
       if ($post instanceof PostInterface) {
         $recipient_group = $post->get('field_recipient_group')->getValue();
+
         if (!empty($recipient_group)) {
           $gid = $recipient_group['0']['target_id'];
         }
       }
     }
-    elseif ($entity['target_type'] === 'node') {
-      $node = $this->entityTypeManager->getStorage('node')
-        ->load($entity['target_id']);
+    elseif ($entity_type === 'group_content') {
+      $group_content = $this->entityTypeManager->getStorage('group_content')
+        ->load($entity_id);
 
       // Try to load the entity.
-      if ($node instanceof ContentEntityInterface) {
+      if ($group_content instanceof GroupRelationshipInterface) {
+        // Get group id.
+        $gid = $group_content->getGroup()->id();
+      }
+    }
+    elseif ($entity_type !== 'comment') {
+      $entity = $this->entityTypeManager->getStorage($entity_type)
+        ->load($entity_id);
+
+      // Try to load the entity.
+      if ($entity instanceof ContentEntityInterface) {
         // Try to load group content from entity.
-        if ($group_contents = GroupContent::loadByEntity($node)) {
+        if ($group_contents = GroupRelationship::loadByEntity($entity)) {
           // Set the group id.
           $gid = reset($group_contents)->getGroup()->id();
         }
-      }
-    }
-    elseif ($entity['target_type'] === 'group_content') {
-      $group_content = $this->entityTypeManager->getStorage('group_content')
-        ->load($entity['target_id']);
-
-      // Try to load the entity.
-      if ($group_content instanceof GroupContentInterface) {
-        // Get group id.
-        $gid = $group_content->getGroup()->id();
       }
     }
 
@@ -148,37 +190,8 @@ class SocialGroupHelperService implements SocialGroupHelperServiceInterface {
 
   /**
    * {@inheritdoc}
-   */
-  public static function getDefaultGroupVisibility(string $type) {
-    $visibility = &drupal_static(__FUNCTION__ . $type);
-
-    if (empty($visibility)) {
-      switch ($type) {
-        case 'closed_group':
-          $visibility = 'group';
-          break;
-
-        case 'open_group':
-          $visibility = 'community';
-          break;
-
-        case 'public_group':
-          $visibility = 'public';
-          break;
-
-        default:
-          $visibility = NULL;
-      }
-
-      \Drupal::moduleHandler()
-        ->alter('social_group_default_visibility', $visibility, $type);
-    }
-
-    return $visibility;
-  }
-
-  /**
-   * {@inheritdoc}
+   *
+   * @todo Deprecate this in 11.x and remove.
    */
   public static function getCurrentGroupMembers() {
     $cache = &drupal_static(__FUNCTION__, []);
@@ -191,7 +204,11 @@ class SocialGroupHelperService implements SocialGroupHelperServiceInterface {
     if ($group instanceof GroupInterface) {
       $memberships = $group->getMembers();
       foreach ($memberships as $member) {
-        $cache[] = $member->getUser()->id();
+        $uid = $member->getUser()->id();
+        // This should always be TRUE but Drupal's interface implementations
+        // are such that PHPStan needs some help.
+        assert(is_int($uid));
+        $cache[] = $uid;
       }
     }
 
@@ -207,17 +224,16 @@ class SocialGroupHelperService implements SocialGroupHelperServiceInterface {
     // Get the memberships for the user if they aren't known yet.
     if (!isset($groups[$uid])) {
       // We need to get all group memberships,
-      // GroupContentType::loadByEntityTypeId('user'); will also return
+      // GroupRelationshipType::loadByEntityTypeId('user'); will also return
       // requests and invites for a given user entity.
-      $group_content_types = GroupContentType::loadByContentPluginId('group_membership');
+      $group_content_types = GroupRelationshipType::loadByPluginId('group_membership');
       $group_content_types = array_keys($group_content_types);
 
-      $query = $this->database->select('group_content_field_data', 'gcfd');
+      $query = $this->database->select('group_relationship_field_data', 'gcfd');
       $query->addField('gcfd', 'gid');
       $query->condition('gcfd.entity_id', (string) $uid);
       $query->condition('gcfd.type', $group_content_types, 'IN');
       $result = $query->execute();
-
       $groups[$uid] = $result !== NULL ? $result->fetchCol() : [];
     }
 
@@ -235,9 +251,9 @@ class SocialGroupHelperService implements SocialGroupHelperServiceInterface {
       $hidden_types = [];
       $this->moduleHandler->alter('social_group_hide_types', $hidden_types);
 
-      $group_content_types = GroupContentType::loadByEntityTypeId('user');
+      $group_content_types = GroupRelationshipType::loadByEntityTypeId('user');
       $group_content_types = array_keys($group_content_types);
-      $query = $this->database->select('group_content_field_data', 'gcfd');
+      $query = $this->database->select('group_relationship_field_data', 'gcfd');
       $query->addField('gcfd', 'gid');
       $query->condition('gcfd.entity_id', $uid);
       $query->condition('gcfd.type', $group_content_types, 'IN');
@@ -275,6 +291,7 @@ class SocialGroupHelperService implements SocialGroupHelperServiceInterface {
     /** @var array $group_types */
     $group_types = $this->entityTypeManager->getStorage('group_type')
       ->getQuery()
+      ->accessCheck()
       ->execute();
 
     // Get all available group types.
@@ -307,7 +324,7 @@ class SocialGroupHelperService implements SocialGroupHelperServiceInterface {
   /**
    * {@inheritdoc}
    */
-  public function addMemberFormField() {
+  public function addMemberFormField(): array {
     return [
       '#title' => $this->t('Find people by name or email address'),
       '#type' => 'select2',
@@ -320,8 +337,68 @@ class SocialGroupHelperService implements SocialGroupHelperServiceInterface {
       ],
       '#selection_handler' => 'social',
       '#target_type' => 'user',
-      '#element_validate' => ['_social_group_unique_members'],
+      '#element_validate' => [
+        [
+          SocialGroupEntityAutocomplete::class,
+          'validateEntityAutocompleteSelect2',
+        ],
+      ],
     ];
+  }
+
+  /**
+   * Returns titles list of all groups, ordered by their type and/or label.
+   *
+   * @param bool $split
+   *   (optional) TRUE if groups should be split by type. Defaults to FALSE.
+   *
+   * @return array
+   *   Array of group ids and group labels.
+   */
+  public static function getGroups(bool $split = FALSE): array {
+    $split_cache_key = $split ? '_split_result' : '';
+    if (!empty($data = &drupal_static("_social_group_helper_service_get_groups{$split_cache_key}", []))) {
+      return $data;
+    }
+
+    $query = \Drupal::database()->select('groups_field_data', 'gfd')
+      ->fields('gfd', ['id', 'label']);
+
+    if ($split) {
+      $query->addField('gfd', 'type');
+      $query->orderBy('type');
+    }
+
+    if (
+      ($query = $query->orderBy('label')->execute()) === NULL ||
+      !($groups = $split ? $query->fetchAll() : $query->fetchAllKeyed())
+    ) {
+      return $data;
+    }
+
+    if ($split) {
+      $bundles = \Drupal::service('entity_type.bundle.info')
+        ->getBundleInfo('group');
+
+      foreach ($groups as $group) {
+        $data[$bundles[$group->type]['label']][$group->id] = $group->label;
+      }
+    }
+    else {
+      $data = $groups;
+    }
+
+    return $data;
+  }
+
+  /**
+   * Returns titles list of all groups, ordered by their type and label.
+   *
+   * @return array
+   *   Array of group ids and group labels.
+   */
+  public static function getSplitGroups(): array {
+    return static::getGroups(TRUE);
   }
 
 }

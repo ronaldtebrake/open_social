@@ -5,9 +5,9 @@
  * Contains social_page.module..
  */
 
+use Drupal\Core\Link;
 use Drupal\Core\Routing\RouteMatchInterface;
 use Drupal\Core\StringTranslation\TranslatableMarkup;
-use Drupal\Core\Url;
 use Drupal\node\NodeInterface;
 
 /**
@@ -35,19 +35,30 @@ function social_page_node_links_alter(array &$links, NodeInterface $entity, arra
 }
 
 /**
+ * Implements hook_social_tagging_type_alter().
+ */
+function social_page_social_tagging_type_alter(array &$items): void {
+  $items['node']['sets'][0]['bundles'][] = 'page';
+}
+
+/**
  * Implements hook_social_user_account_header_create_links().
  *
  * Adds the "Create Page" link to the content creation menu.
  */
 function social_page_social_user_account_header_create_links($context) {
+  $link = Link::createFromRoute((new TranslatableMarkup('New Page')), 'node.add', [
+    'node_type' => 'page',
+  ]);
+
   return [
     'add_page' => [
       '#type' => 'link',
       '#attributes' => [
         'title' => new TranslatableMarkup('Create New Page'),
       ],
-      '#title' => new TranslatableMarkup('New Page'),
       '#weight' => 300,
-    ] + Url::fromRoute('node.add', ['node_type' => 'page'])->toRenderArray(),
+      '#access' => $link->getUrl()->access(),
+    ] + $link->toRenderable(),
   ];
 }

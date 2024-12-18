@@ -5,6 +5,8 @@ Feature: See my upcoming events
   Goal/desire: I want to see an overview of upcoming events on my profile
 
   Scenario: Successfully show my upcoming events as a Verified
+    # @todo This test relies on the old layout.
+    Given the theme is set to old
     Given I am on the homepage
     Then I should not see "My upcoming events"
 
@@ -23,6 +25,8 @@ Feature: See my upcoming events
       | status           | 1                       |
 
     When I press the "Enroll" button
+    And I wait for AJAX to finish
+    And I press the "Close" button
     Then I should see "Enrolled"
 
     When I go to the homepage

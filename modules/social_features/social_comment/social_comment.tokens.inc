@@ -190,8 +190,11 @@ function social_comment_tokens($type, $tokens, array $data, array $options, Bubb
             break;
 
           case 'commented_content_type':
+          case 'commented_content_type:capitalized':
           case 'commented_entity_link':
+          case 'commented_entity_link:capitalized':
           case 'commented_entity_link_html':
+          case 'commented_entity_link_html:capitalized':
 
             if (!$message->get('field_message_related_object')->isEmpty()) {
               $target_type = $message->getFieldValue('field_message_related_object', 'target_type');
@@ -201,7 +204,6 @@ function social_comment_tokens($type, $tokens, array $data, array $options, Bubb
                 ->load($target_id);
 
               if ($comment instanceof CommentInterface) {
-                /** @var \Drupal\Core\Entity\EntityInterface $entity */
                 $entity = $comment->getCommentedEntity();
                 if (!empty($entity)) {
                   if ($entity instanceof PostInterface) {
@@ -212,22 +214,26 @@ function social_comment_tokens($type, $tokens, array $data, array $options, Bubb
                   }
                   else {
                     if ($entity instanceof NodeInterface) {
-                      $commented_content_type = strtolower($entity->type->entity->label());
+                      $commented_content_type = strtolower((string) $entity->type->entity->label());
                     }
                     else {
                       $commented_content_type = $entity->bundle();
                     }
                   }
 
-                  if ($name === 'commented_content_type') {
+                  if (isset($commented_content_type) && str_ends_with($name, ':capitalized')) {
+                    $commented_content_type = ucfirst($commented_content_type);
+                  }
+
+                  if (str_starts_with($name, 'commented_content_type')) {
                     if (!empty($commented_content_type)) {
                       $replacements[$original] = $commented_content_type;
                     }
                   }
-                  if ($name === 'commented_entity_link') {
+                  if (str_starts_with($name, 'commented_entity_link')) {
                     $replacements[$original] = $entity->toUrl('canonical', ['absolute' => TRUE])->toString();
                   }
-                  if ($name === 'commented_entity_link_html') {
+                  if (str_starts_with($name, 'commented_entity_link_html')) {
                     $url_options = ['absolute' => TRUE];
                     $link = $entity->toUrl('canonical', $url_options)->toString();
 
@@ -239,6 +245,7 @@ function social_comment_tokens($type, $tokens, array $data, array $options, Bubb
                     else {
                       $entity_link_html = '<a href="' . $link . '">' . $commented_content_type . '</a>';
                     }
+
                     $replacements[$original] = Markup::create($entity_link_html);
                   }
                 }
@@ -246,7 +253,6 @@ function social_comment_tokens($type, $tokens, array $data, array $options, Bubb
             }
 
             break;
-
         }
       }
     }
@@ -260,6 +266,11 @@ function social_comment_tokens($type, $tokens, array $data, array $options, Bubb
  */
 function social_comment_tokens_alter(array &$replacements, array $context, BubbleableMetadata $bubbleable_metadata) {
   if ($context['type'] == 'message' && !empty($context['data']['message'])) {
+    // Translate hook_tokens options to the options for TranslatableMarkup.
+    $translation_options = [
+      'langcode' => $context['options']['langcode'] ?? NULL,
+    ];
+
     /** @var Drupal\message\Entity\Message $message */
     $message = $context['data']['message'];
 
@@ -286,14 +297,14 @@ function social_comment_tokens_alter(array &$replacements, array $context, Bubbl
                 /** @var \Drupal\Core\Entity\EntityInterface $commented_entity */
                 $link = $commented_entity->toUrl('canonical', ['absolute' => TRUE, 'fragment' => 'comment-' . $comment->id()]);
 
-                $cta_button = $email_token_services->getCtaButton($link, new TranslatableMarkup('Reply to this comment'));
-                $replacements[$context['tokens']['cta_button']] = \Drupal::service('renderer')->renderPlain($cta_button);
+                $cta_button = $email_token_services->getCtaButton($link, new TranslatableMarkup('Reply to this comment', [], $translation_options));
+                $replacements[$context['tokens']['cta_button']] = \Drupal::service('renderer')->renderInIsolation($cta_button);
               }
 
               // Replace the preview token.
               if (isset($context['tokens']['preview'])) {
                 $preview_info = $email_token_services->getCommentPreview($comment);
-                $replacements[$context['tokens']['preview']] = \Drupal::service('renderer')->renderPlain($preview_info);
+                $replacements[$context['tokens']['preview']] = \Drupal::service('renderer')->renderInIsolation($preview_info);
               }
               break;
           }
@@ -315,6 +326,7 @@ function social_comment_tokens_alter(array &$replacements, array $context, Bubbl
 function _social_comment_get_summary($text) {
   $summary = html_entity_decode(strip_tags($text));
   $summary = preg_replace('/\n|\r|\t/m', ' ', $summary);
+  assert($summary !== NULL, 'Invalid regular expression in preg_replace call');
   $max_length = 280;
 
   if (mb_strlen($summary) > $max_length) {

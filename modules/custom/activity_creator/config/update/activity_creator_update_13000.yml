@@ -1,0 +1,16 @@
+field.field.activity.activity.field_activity_entity:
+  expected_config: { }
+  update_actions:
+    delete:
+      settings: { }
+    add:
+      settings: { }
+field.storage.activity.field_activity_entity:
+  expected_config: { }
+  update_actions:
+    delete:
+      settings:
+        entity_type_ids: { }
+    add:
+      settings:
+        entity_type_ids: { }

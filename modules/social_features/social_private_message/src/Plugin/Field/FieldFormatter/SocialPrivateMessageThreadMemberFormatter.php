@@ -24,7 +24,7 @@ class SocialPrivateMessageThreadMemberFormatter extends PrivateMessageThreadMemb
   /**
    * {@inheritdoc}
    */
-  public function viewElements(FieldItemListInterface $items, $langcode) {
+  public function viewElements(FieldItemListInterface $items, $langcode): array {
     $access_profiles = $this->currentUser->hasPermission('access user profiles');
     $users = [];
 
@@ -49,7 +49,7 @@ class SocialPrivateMessageThreadMemberFormatter extends PrivateMessageThreadMemb
         }
         elseif ($this->getSetting('display_type') == 'entity') {
           $renderable = $view_builder->view($user, $this->getSetting('entity_display_mode'));
-          $users[$user->id()] = render($renderable);
+          $users[$user->id()] = $this->renderer->render($renderable);
         }
       }
       else {

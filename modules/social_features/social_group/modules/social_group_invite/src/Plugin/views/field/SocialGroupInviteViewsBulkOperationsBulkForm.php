@@ -21,7 +21,7 @@ class SocialGroupInviteViewsBulkOperationsBulkForm extends ViewsBulkOperationsBu
   /**
    * {@inheritdoc}
    */
-  public function getBulkOptions() {
+  public function getBulkOptions(): array {
     $bulk_options = parent::getBulkOptions();
 
     if ($this->view->id() !== 'social_group_invitations') {
@@ -52,21 +52,45 @@ class SocialGroupInviteViewsBulkOperationsBulkForm extends ViewsBulkOperationsBu
         // If not we clear it right away.
         // Since we don't want to mess with cached date.
         $this->deleteTempstoreData($this->view->id(), $this->view->current_display);
+
+        // Calculate bulk form keys.
+        $bulk_form_keys = [];
+        if (!empty($this->view->result)) {
+          $base_field = $this->view->storage->get('base_field');
+          foreach ($this->view->result as $row_index => $row) {
+            if ($entity = $this->getEntity($row)) {
+              $bulk_form_keys[$row_index] = self::calculateEntityBulkFormKey(
+                $entity,
+                $row->{$base_field}
+              );
+            }
+          }
+        }
         // Reset initial values.
-        $this->updateTempstoreData();
+        if (
+          empty($form_state->getUserInput()['op']) &&
+          !empty($bulk_form_keys)
+        ) {
+          $this->updateTempstoreData($bulk_form_keys);
+        }
+        else {
+          $this->updateTempstoreData();
+        }
+
         // Initialize it again.
         $tempstoreData = $this->getTempstoreData($this->view->id(), $this->view->current_display);
       }
       // Add the Group ID to the data.
       $tempstoreData['group_id'] = $group->id();
+      $this->setTempstoreData($tempstoreData, $this->view->id(), $this->view->current_display);
     }
 
-    $this->setTempstoreData($tempstoreData, $this->view->id(), $this->view->current_display);
-
     // Reorder the form array.
-    $multipage = $form['header'][$this->options['id']]['multipage'];
-    unset($form['header'][$this->options['id']]['multipage']);
-    $form['header'][$this->options['id']]['multipage'] = $multipage;
+    if (!empty($form['header'])) {
+      $multipage = $form['header'][$this->options['id']]['multipage'];
+      unset($form['header'][$this->options['id']]['multipage']);
+      $form['header'][$this->options['id']]['multipage'] = $multipage;
+    }
 
     // Render proper classes for the header in VBO form.
     $wrapper = &$form['header'][$this->options['id']];
@@ -78,32 +102,35 @@ class SocialGroupInviteViewsBulkOperationsBulkForm extends ViewsBulkOperationsBu
     // Add some JS for altering titles and switches.
     $form['#attached']['library'][] = 'social_group/views_bulk_operations.frontUi';
 
-    // Render select all results checkbox.
+    // Render select all result checkboxes.
     if (!empty($wrapper['select_all'])) {
+      $total_results = $this->tempStoreData['total_results'] ?? 0;
       $wrapper['select_all']['#title'] = $this->t('Select / unselect all @count invites across all the pages', [
-        '@count' => $this->tempStoreData['total_results'] ? ' ' . $this->tempStoreData['total_results'] : '',
+        '@count' => ' ' . $total_results,
       ]);
       // Styling attributes for the select box.
       $form['header'][$this->options['id']]['select_all']['#attributes']['class'][] = 'form-no-label';
       $form['header'][$this->options['id']]['select_all']['#attributes']['class'][] = 'checkbox';
-    }
 
-    /** @var \Drupal\Core\StringTranslation\TranslatableMarkup $title */
-    $title = $wrapper['multipage']['#title'];
-    $arguments = $title->getArguments();
-    $count = empty($arguments['%count']) ? 0 : $arguments['%count'];
+      // Initialize the count.
+      $count = 0;
+      if (isset($this->tempStoreData['list'])) {
+        // Set the count for selected enrollees.
+        $count = empty($this->tempStoreData['exclude_mode']) ? \count($this->tempStoreData['list']) : $this->tempStoreData['total_results'] - \count($this->tempStoreData['list']);
+      }
 
-    $title = $this->formatPlural($count, '<b><em class="placeholder">@count</em> Invite</b> is selected', '<b><em class="placeholder">@count</em> Invites</b> are selected');
-    $wrapper['multipage']['#title'] = [
-      '#type' => 'html_tag',
-      '#tag' => 'div',
-      '#value' => $title,
-      '#attributes' => [
-        'class' => [
-          'vbo-info-list-wrapper',
+      $title = $this->formatPlural($count, '<b><em class="placeholder">@count</em> Invite</b> is selected', '<b><em class="placeholder">@count</em> Invites</b> are selected');
+      $wrapper['multipage']['#title'] = [
+        '#type' => 'html_tag',
+        '#tag' => 'div',
+        '#value' => $title,
+        '#attributes' => [
+          'class' => [
+            'vbo-info-list-wrapper',
+          ],
         ],
-      ],
-    ];
+      ];
+    }
 
     // Add selector so the JS of VBO applies correctly.
     $wrapper['multipage']['#attributes']['class'][] = 'vbo-multipage-selector';
@@ -136,23 +163,24 @@ class SocialGroupInviteViewsBulkOperationsBulkForm extends ViewsBulkOperationsBu
 
     // Actions are not a select list but a dropbutton list.
     $actions = &$wrapper['actions'];
+    if (!empty($actions) && !empty($wrapper['action'])) {
+      $actions['#theme'] = 'links__dropbutton__operations__actions';
+      $actions['#label'] = $this->t('Actions');
+      $actions['#type'] = 'dropbutton';
 
-    $actions['#theme'] = 'links__dropbutton__operations__actions';
-    $actions['#label'] = $this->t('Actions');
-    $actions['#type'] = 'dropbutton';
-
-    $items = [];
-    foreach ($wrapper['action']['#options'] as $key => $value) {
-      if ($key !== '' && array_key_exists($key, $this->bulkOptions)) {
-        $items[] = [
-          '#type' => 'submit',
-          '#value' => $value,
-        ];
+      $items = [];
+      foreach ($wrapper['action']['#options'] as $key => $value) {
+        if ($key !== '' && array_key_exists($key, $this->bulkOptions)) {
+          $items[] = [
+            '#type' => 'submit',
+            '#value' => $value,
+          ];
+        }
       }
-    }
 
-    // Add our links to the dropdown buttondrop type.
-    $actions['#links'] = $items;
+      // Add our links to the dropdown buttondrop type.
+      $actions['#links'] = $items;
+    }
 
     // Remove the Views select list and submit button.
     $form['actions']['#type'] = 'hidden';

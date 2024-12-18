@@ -5,6 +5,8 @@
  * The Social Path Manager module.
  */
 
+use Drupal\Core\Entity\ContentEntityInterface;
+use Drupal\Core\Entity\EntityFormInterface;
 use Drupal\Core\Entity\EntityInterface;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\Core\Url;
@@ -18,7 +20,10 @@ use Drupal\group\Entity\GroupType;
 function social_path_manager_form_alter(&$form, FormStateInterface $form_state, $form_id) {
   $social_group_types = _social_path_manager_group_types();
 
-  $group_forms = [];
+  $group_forms = [
+    'add' => [],
+    'edit' => [],
+  ];
 
   foreach ($social_group_types as $social_group_type) {
     $group_forms['edit'][] = "group_{$social_group_type}_edit_form";
@@ -37,6 +42,84 @@ function social_path_manager_form_alter(&$form, FormStateInterface $form_state, 
   // Hide the URL alias for user forms, doesn't do anything.
   if (!empty($form['path']) && in_array($form_id, $user_forms, TRUE)) {
     unset($form['path']);
+  }
+
+  // Add custom validation function.
+  // This is only applicable on all content entities which has field
+  // 'path' in the form.
+  if ($form_state->getFormObject() instanceof EntityFormInterface
+    && $form_state->getFormObject()->getEntity() instanceof ContentEntityInterface
+  ) {
+    $form['#validate'][] = "_social_path_manager_path_alias_validate";
+  }
+}
+
+/**
+ * Custom form validation handler for validating path alias.
+ *
+ * @param array $form
+ *   The form array.
+ * @param \Drupal\Core\Form\FormStateInterface $form_state
+ *   Form state.
+ */
+function _social_path_manager_path_alias_validate(array $form, FormStateInterface $form_state): void {
+  $path_alias = $form_state->getValue('path');
+  if (!$path_alias) {
+    return;
+  }
+
+  $path_alias = end($path_alias);
+  $alias_url = $path_alias['alias'] ?: NULL;
+  if (!$alias_url) {
+    return;
+  }
+
+  // Check if we are pointing to a file, which is not secure.
+  $file_path = DRUPAL_ROOT . $alias_url;
+  if (file_exists($file_path)) {
+    $form_state->setErrorByName(
+      'path',
+      t("A path alias cannot point to an existing file."),
+    );
+    return;
+  }
+
+  // Normalize the path to remove leading or trailing slashes.
+  $normalized_path = trim($alias_url, '/');
+
+  // List of reserved path prefixes.
+  $reserved_paths = [
+    'admin',
+    'user',
+    'node',
+    'taxonomy',
+    'system',
+    'comment',
+    'modules',
+    'themes',
+    'libraries',
+    'sites',
+    'core',
+    'profiles',
+    'index.php',
+    'robots.txt',
+    'favicon.ico',
+  ];
+
+  // Check if the path starts with any of the reserved prefixes.
+  foreach ($reserved_paths as $reserved) {
+    if (strpos($normalized_path, $reserved) === 0) {
+      $form_state->setErrorByName(
+        'path',
+        t(
+          "The path @url is reserved and cannot be used as an alias.",
+          [
+            '@url' => $alias_url,
+          ]
+        ),
+      );
+      return;
+    }
   }
 }
 
@@ -106,7 +189,7 @@ function social_path_manager_batch_alter(&$batch) {
  * @throws \Exception
  */
 function _social_path_manager_update_group_tab_aliases($id, $action) {
-  $group_ids = array_keys(\Drupal::entityQuery('group')->execute());
+  $group_ids = array_keys(\Drupal::entityQuery('group')->accessCheck()->execute());
   $created = 0;
 
   $groups = Group::loadMultiple($group_ids);
@@ -251,7 +334,7 @@ function _social_path_manager_update_alias(EntityInterface $entity, $op, $bulk =
             $entity_language = $entity->language()->getId();
 
             // Prevent adding alias for default tab.
-            $source_parts = explode('/', $path['source']);
+            $source_parts = explode('/', $path['source'] ?? "");
             if (end($source_parts) === $suffix) {
               continue;
             }

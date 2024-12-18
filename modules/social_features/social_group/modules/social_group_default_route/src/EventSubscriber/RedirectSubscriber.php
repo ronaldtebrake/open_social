@@ -2,14 +2,14 @@
 
 namespace Drupal\social_group_default_route\EventSubscriber;
 
-use Drupal\Core\Routing\CurrentRouteMatch;
-use Drupal\Core\Session\AccountProxy;
-use Drupal\Core\Url;
-use Drupal\group\Entity\Group;
-use Drupal\user\Entity\User;
+use Drupal\Core\Routing\RouteMatchInterface;
+use Drupal\Core\Session\AccountProxyInterface;
+use Drupal\social_group\SocialGroupInterface;
+use Drupal\social_group_default_route\SocialGroupDefaultRouteRedirectService;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
-use Symfony\Component\HttpFoundation\RedirectResponse;
+use Symfony\Component\HttpKernel\Event\ExceptionEvent;
 use Symfony\Component\HttpKernel\Event\RequestEvent;
+use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
 use Symfony\Component\HttpKernel\KernelEvents;
 
 /**
@@ -20,39 +20,27 @@ use Symfony\Component\HttpKernel\KernelEvents;
 class RedirectSubscriber implements EventSubscriberInterface {
 
   /**
-   * The current route.
+   * SocialGroupDefaultRouteRedirectSubscriber constructor.
    *
-   * @var \Drupal\Core\Routing\CurrentRouteMatch
-   */
-  protected $currentRoute;
-
-  /**
-   * The current user.
-   *
-   * @var \Drupal\Core\Session\AccountProxy
-   */
-  protected $currentUser;
-
-  /**
-   * Redirectsubscriber construct.
-   *
-   * @param \Drupal\Core\Routing\CurrentRouteMatch $route_match
+   * @param \Drupal\Core\Routing\RouteMatchInterface $currentRoute
    *   The current route.
-   * @param \Drupal\Core\Session\AccountProxy $current_user
+   * @param \Drupal\Core\Session\AccountProxyInterface $currentUser
    *   The current user.
+   * @param \Drupal\social_group_default_route\SocialGroupDefaultRouteRedirectService $redirectService
+   *   The redirect service.
    */
-  public function __construct(CurrentRouteMatch $route_match, AccountProxy $current_user) {
-    $this->currentRoute = $route_match;
-    $this->currentUser = $current_user;
+  public function __construct(
+    protected RouteMatchInterface $currentRoute,
+    protected AccountProxyInterface $currentUser,
+    protected SocialGroupDefaultRouteRedirectService $redirectService,
+  ) {
   }
 
   /**
-   * Get the request events.
-   *
-   * @return mixed
-   *   Returns request events.
+   * {@inheritdoc}
    */
   public static function getSubscribedEvents() {
+    $events[KernelEvents::EXCEPTION][] = ['onKernelException', 101];
     $events[KernelEvents::REQUEST][] = ['groupLandingPage'];
     return $events;
   }
@@ -63,57 +51,56 @@ class RedirectSubscriber implements EventSubscriberInterface {
    * @param \Symfony\Component\HttpKernel\Event\RequestEvent $event
    *   The event.
    */
-  public function groupLandingPage(RequestEvent $event) {
-
+  public function groupLandingPage(RequestEvent $event): void {
     // First check if the current route is the group canonical.
-    $routeMatch = $this->currentRoute->getRouteName();
+    $route_name = $this->currentRoute->getRouteName();
 
     // Not group canonical, then we leave.
     if (
-      $routeMatch !== 'entity.group.canonical' &&
-      $routeMatch !== 'social_group_default.group_home'
+      $route_name !== $this->redirectService::DEFAULT_GROUP_ROUTE &&
+      $route_name !== $this->redirectService::ALTERNATIVE_ROUTE
     ) {
       return;
     }
 
-    // Fetch the group parameter and check if's an actual group.
-    $group = $this->currentRoute->getParameter('group');
+    $group = $this->redirectService->getGroup();
+
     // Not group, then we leave.
-    if (!$group instanceof Group) {
+    if (!$group instanceof SocialGroupInterface) {
+      return;
+    }
+    // If redirection isn't applicable for current group bundle.
+    $group_routes = $this->redirectService->getGroupDefaultRoutes($group);
+    if (empty($group_routes)) {
       return;
     }
 
-    // Set the already default redirect route.
-    $defaultRoute = 'social_group.stream';
-    $defaultClosedRoute = 'view.group_information.page_group_about';
+    $this->redirectService->doRedirect($event, $group);
+  }
 
-    // Check if this group has a custom route set.
-    $route = $group->getFieldValue('default_route', 'value');
+  /**
+   * Redirect on kernel exception.
+   *
+   * @param \Symfony\Component\HttpKernel\Event\ExceptionEvent $event
+   *   The event object.
+   */
+  public function onKernelException(ExceptionEvent $event): void {
+    $exception = $event->getThrowable();
 
-    // Check if current user is a member.
-    if ($group->getMember(User::load($this->currentUser->id())) === FALSE) {
-      $route = $group->getFieldValue('default_route_an', 'value');
-      // If you're not a member and the group type is closed.
-      if ($route === NULL) {
-        $route = ($group->getGroupType()->id() === 'closed_group') ? $defaultClosedRoute : $defaultRoute;
-      }
-    }
-
-    // Still no route here? Then we use the normal default.
-    if ($route === NULL) {
-      $route = $defaultRoute;
-    }
-
-    // Determine the URL we want to redirect to.
-    $url = Url::fromRoute($route, ['group' => $group->id()]);
-
-    // If it's not set, set to canonical, or the current user has no access.
-    if (!isset($route) || ($route === $routeMatch) || $url->access($this->currentUser) === FALSE) {
-      // This basically means that the normal flow remains intact.
+    $group = $this->redirectService->getGroup();
+    // Not group, then we leave.
+    if (!$group instanceof SocialGroupInterface) {
       return;
     }
-    // Redirect.
-    $event->setResponse(new RedirectResponse($url->toString()));
+    // If redirection isn't applicable for current group bundle.
+    $group_routes = $this->redirectService->getGroupDefaultRoutes($group);
+    if (empty($group_routes)) {
+      return;
+    }
+
+    if ($exception instanceof AccessDeniedHttpException) {
+      $this->redirectService->doRedirect($event, $group);
+    }
   }
 
 }

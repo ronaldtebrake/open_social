@@ -3,6 +3,8 @@
 namespace Drupal\activity_viewer\Plugin\views\filter;
 
 use Drupal\Core\Database\Query\Condition;
+use Drupal\Core\Routing\RouteMatchInterface;
+use Drupal\group\Entity\GroupInterface;
 use Drupal\social_group\SocialGroupHelperService;
 use Drupal\views\Plugin\views\filter\FilterPluginBase;
 use Drupal\views\Views;
@@ -25,6 +27,13 @@ class ActivityPostVisibilityAccess extends FilterPluginBase {
   protected $groupHelper;
 
   /**
+   * The route match interface.
+   *
+   * @var \Drupal\Core\Routing\RouteMatchInterface
+   */
+  protected $routeMatch;
+
+  /**
    * Constructs a Handler object.
    *
    * @param array $configuration
@@ -35,11 +44,20 @@ class ActivityPostVisibilityAccess extends FilterPluginBase {
    *   The plugin implementation definition.
    * @param \Drupal\social_group\SocialGroupHelperService $group_helper
    *   The group helper.
+   * @param \Drupal\Core\Routing\RouteMatchInterface $route_match
+   *   The currently active route match object.
    */
-  public function __construct(array $configuration, $plugin_id, $plugin_definition, SocialGroupHelperService $group_helper) {
+  public function __construct(
+    array $configuration,
+    $plugin_id,
+    $plugin_definition,
+    SocialGroupHelperService $group_helper,
+    RouteMatchInterface $route_match
+  ) {
     parent::__construct($configuration, $plugin_id, $plugin_definition);
 
     $this->groupHelper = $group_helper;
+    $this->routeMatch = $route_match;
   }
 
   /**
@@ -48,7 +66,8 @@ class ActivityPostVisibilityAccess extends FilterPluginBase {
   public static function create(ContainerInterface $container, array $configuration, $plugin_id, $plugin_definition) {
     return new static(
       $configuration, $plugin_id, $plugin_definition,
-      $container->get('social_group.helper_service')
+      $container->get('social_group.helper_service'),
+      $container->get('current_route_match')
     );
   }
 
@@ -78,16 +97,16 @@ class ActivityPostVisibilityAccess extends FilterPluginBase {
   public function query():void {
     $account = $this->view->getUser();
 
-    $open_groups = [];
-    $group_memberships = [];
-
     if ($this->moduleHandler->moduleExists('social_group')) {
       // @todo This creates a dependency on Social Group which shouldn't exist,
       // this access logic should be in that module instead.
-      $open_groups = social_group_get_all_open_groups();
       $group_memberships = $this->groupHelper->getAllGroupsForUser($account->id());
     }
-    $groups = array_merge($open_groups, $group_memberships);
+
+    $groups = [
+      ...$group_memberships ?? [],
+    ];
+
     $groups_unique = array_unique($groups);
 
     // Add tables and joins.
@@ -126,7 +145,7 @@ class ActivityPostVisibilityAccess extends FilterPluginBase {
     $configuration = [
       'left_table' => 'activity__field_activity_entity',
       'left_field' => 'field_activity_entity_target_id',
-      'table' => 'group_content_field_data',
+      'table' => 'group_relationship_field_data',
       'field' => 'id',
       'operator' => '=',
       'extra' => [
@@ -171,7 +190,7 @@ class ActivityPostVisibilityAccess extends FilterPluginBase {
 
     // Nodes: retrieve all the nodes 'created' activity by node access grants.
     $node_access = new Condition('AND');
-    $node_access->condition('activity__field_activity_entity.field_activity_entity_target_type', 'node', '=');
+    $node_access->condition('activity__field_activity_entity.field_activity_entity_target_type', 'node');
     $node_access_grants = node_access_grants('view', $account);
     $grants = new Condition('OR');
 
@@ -195,7 +214,7 @@ class ActivityPostVisibilityAccess extends FilterPluginBase {
     // Posts: retrieve all the posts in groups the user is a member of.
     if ($account->isAuthenticated() && count($groups_unique) > 0) {
       $posts_in_groups = new Condition('AND');
-      $posts_in_groups->condition('activity__field_activity_entity.field_activity_entity_target_type', 'post', '=');
+      $posts_in_groups->condition('activity__field_activity_entity.field_activity_entity_target_type', 'post');
       $posts_in_groups->condition('activity__field_activity_recipient_group.field_activity_recipient_group_target_id', $groups_unique, 'IN');
 
       $or->condition($posts_in_groups);
@@ -203,9 +222,13 @@ class ActivityPostVisibilityAccess extends FilterPluginBase {
 
     // Posts: all the posts the user has access to by permission.
     $post_access = new Condition('AND');
-    $post_access->condition('activity__field_activity_entity.field_activity_entity_target_type', 'post', '=');
+    $post_access->condition('activity__field_activity_entity.field_activity_entity_target_type', 'post');
 
-    if (!$account->hasPermission('bypass group access')) {
+    // Get group from url-parameter.
+    $group = $this->routeMatch->getParameter('group');
+    // If the group parameter isn't group entity, visibility rules.
+    // And check group permission when group parameter is group entity.
+    if (!$group instanceof GroupInterface || !$group->hasPermission('access content overview', $account)) {
       $post_access->condition('post__field_visibility.field_visibility_value', '3', '!=');
 
       if (!$account->hasPermission('view public posts')) {
@@ -221,10 +244,10 @@ class ActivityPostVisibilityAccess extends FilterPluginBase {
     $or->condition($post_access);
 
     $post_status = new Condition('OR');
-    $post_status->condition('post.status', 1, '=');
+    $post_status->condition('post.status', 1);
 
     if ($account->hasPermission('view unpublished post entities')) {
-      $post_status->condition('post.status', 0, '=');
+      $post_status->condition('post.status', 0);
     }
     $post_status->condition('activity__field_activity_entity.field_activity_entity_target_type', 'post', '!=');
     $and_wrapper->condition($post_status);
@@ -234,13 +257,13 @@ class ActivityPostVisibilityAccess extends FilterPluginBase {
       // For comments in groups, the user must be a member of at least 1 group.
       if (count($groups_unique) > 0) {
         $comments_on_content_in_groups = new Condition('AND');
-        $comments_on_content_in_groups->condition('activity__field_activity_entity.field_activity_entity_target_type', 'comment', '=');
+        $comments_on_content_in_groups->condition('activity__field_activity_entity.field_activity_entity_target_type', 'comment');
         $comments_on_content_in_groups->condition('activity__field_activity_recipient_group.field_activity_recipient_group_target_id', $groups_unique, 'IN');
         $or->condition($comments_on_content_in_groups);
       }
 
       $comments_on_content = new Condition('AND');
-      $comments_on_content->condition('activity__field_activity_entity.field_activity_entity_target_type', 'comment', '=');
+      $comments_on_content->condition('activity__field_activity_entity.field_activity_entity_target_type', 'comment');
       $comments_on_content->isNull('activity__field_activity_recipient_group.field_activity_recipient_group_target_id');
       $or->condition($comments_on_content);
     }

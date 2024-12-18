@@ -17,12 +17,13 @@ class ContentReportActivityContext extends ActivityContextBase {
   /**
    * {@inheritdoc}
    */
-  public function getRecipients(array $data, $last_uid, $limit) {
+  public function getRecipients(array $data, int $last_id, int $limit): array {
     $recipients = [];
 
     $ids = $this->entityTypeManager->getStorage('user')->getQuery()
       ->condition('status', 1)
       ->condition('roles', $this->getRolesWithPermission(), 'IN')
+      ->accessCheck()
       ->execute();
 
     if (!empty($ids)) {

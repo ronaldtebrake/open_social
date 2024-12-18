@@ -6,36 +6,44 @@
  */
 
 /**
- * Enable editor advanced link module.
+ * Implements hook_update_last_removed().
  */
-function social_editor_update_8901() {
-  \Drupal::service('module_installer')->install(['editor_advanced_link']);
+function social_editor_update_last_removed() : int {
+  return 9002;
 }
 
 /**
- * Added editor advanced link html attributes.
+ * Enable the responsive table filter module.
  */
-function social_editor_update_8903() {
-  /** @var \Drupal\update_helper\Updater $updateHelper */
-  $updateHelper = \Drupal::service('update_helper.updater');
+function social_editor_update_13001(): string {
+  if (!\Drupal::service('module_handler')->moduleExists('responsive_table_filter')) {
+    \Drupal::service('module_installer')->install(['responsive_table_filter']);
+  }
+
+  /** @var \Drupal\update_helper\Updater $updater */
+  $updater = \Drupal::service('update_helper.updater');
 
   // Execute configuration update definitions with logging of success.
-  $updateHelper->executeUpdate('social_editor', 'social_editor_update_8903');
+  $updater->executeUpdate('social_editor', __FUNCTION__);
 
   // Output logged messages to related channel of update execution.
-  return $updateHelper->logger()->output();
+  return $updater->logger()->output();
 }
 
 /**
- * Added editor table widget for basic_html format.
+ * Install and enable fullscreen button to CKEditor 5.
  */
-function social_editor_update_8904() {
-  /** @var \Drupal\update_helper\Updater $updateHelper */
-  $updateHelper = \Drupal::service('update_helper.updater');
+function social_editor_update_13002(): string {
+  if (!\Drupal::service('module_handler')->moduleExists('ckeditor5_premium_features_fullscreen')) {
+    \Drupal::service('module_installer')->install(['ckeditor5_premium_features_fullscreen']);
+  }
+
+  /** @var \Drupal\update_helper\Updater $updater */
+  $updater = \Drupal::service('update_helper.updater');
 
   // Execute configuration update definitions with logging of success.
-  $updateHelper->executeUpdate('social_editor', 'social_editor_update_8904');
+  $updater->executeUpdate('social_editor', __FUNCTION__);
 
   // Output logged messages to related channel of update execution.
-  return $updateHelper->logger()->output();
+  return $updater->logger()->output();
 }

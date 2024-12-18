@@ -20,20 +20,14 @@ function social_profile_fields_install() {
   _social_profile_fields_update_search_index();
   _social_profile_fields_update_search_index('social_all');
   _social_profile_fields_nationalities();
-}
 
-/**
- * Disable and enable the search index, so the nickname field is added.
- */
-function social_profile_fields_update_8001() {
-  _social_profile_fields_update_search_index();
-}
+  $permissions = [
+    'create terms in nationality',
+    'delete terms in nationality',
+    'edit terms in nationality',
+  ];
+  user_role_grant_permissions('sitemanager', $permissions);
 
-/**
- * Disable and enable the main search index, so the nickname field is added.
- */
-function social_profile_fields_update_8002() {
-  _social_profile_fields_update_search_index('social_all');
 }
 
 /**
@@ -77,35 +71,10 @@ function _social_profile_fields_update_search_index($index_id = 'social_users') 
 }
 
 /**
- * Add a field for nationality.
- */
-function social_profile_fields_update_8003() {
-  $entity_type_ids = [
-    'taxonomy.vocabulary.' => 'taxonomy_vocabulary',
-    'field.storage.profile.field_profile_' => 'field_storage_config',
-    'field.field.profile.profile.field_profile_' => 'field_config',
-  ];
-
-  $path = drupal_get_path('module', 'social_profile_fields') . '/config/static/';
-
-  foreach ($entity_type_ids as $prefix => $entity_type_id) {
-    $config_file = $path . $prefix . 'nationality_8003.yml';
-    $settings = Yaml::parseFile($config_file);
-
-    /** @var \Drupal\Core\Config\Entity\ConfigEntityStorageInterface $storage */
-    $storage = \Drupal::entityTypeManager()->getStorage($entity_type_id);
-
-    $storage->createFromStorageRecord($settings)->save();
-  }
-
-  _social_profile_fields_nationalities();
-}
-
-/**
  * Create taxonomy terms for nationalities in the "Nationality" vocabulary.
  */
 function _social_profile_fields_nationalities() {
-  $path = drupal_get_path('module', 'social_profile_fields') . '/content/';
+  $path = \Drupal::service('extension.list.module')->getPath('social_profile_fields') . '/content/';
   $data = Yaml::parseFile($path . 'nationalities.yml');
 
   $storage = \Drupal::entityTypeManager()->getStorage('taxonomy_term');
@@ -116,4 +85,108 @@ function _social_profile_fields_nationalities() {
 
     $term->setName($nationality)->save();
   }
+}
+
+/**
+ * Implements hook_update_last_removed().
+ */
+function social_profile_fields_update_last_removed() : int {
+  return 11201;
+}
+
+/**
+ * Add new permissions for taxonomies.
+ */
+function social_profile_fields_update_121001(): void {
+  // Nothing to do if the module is not installed.
+  if (!\Drupal::moduleHandler()->moduleExists("taxonomy_access_fix")) {
+    return;
+  }
+
+  // Permission to grant.
+  $taxonomy_permissions = [
+    'view terms in nationality',
+    'view term names in nationality',
+    'select terms in nationality',
+  ];
+
+  // Authenticated roles.
+  $authenticated_roles = [
+    'sitemanager',
+    'verified',
+    'contentmanager',
+  ];
+
+  // Load the permission.
+  $entity_type_manager = \Drupal::entityTypeManager();
+  foreach ($authenticated_roles as $role) {
+    /** @var \Drupal\user\RoleInterface $role */
+    $role = $entity_type_manager->getStorage('user_role')->load($role);
+
+    // If the role does not have the permission, grant permission.
+    foreach ($taxonomy_permissions as $taxonomy_permission) {
+      if (!$role->hasPermission($taxonomy_permission)) {
+        $role->grantPermission($taxonomy_permission);
+        $role->save();
+      }
+    }
+  }
+
+  // For anonymous role, we need to check the if Registration Fields is enabled.
+  if (!\Drupal::moduleHandler()->moduleExists("social_registration_fields")) {
+    return;
+  }
+
+  // Load anonymous role.
+  /** @var \Drupal\user\RoleInterface $role */
+  $role = $entity_type_manager->getStorage('user_role')->load('anonymous');
+
+  // If the role does not have the permission, grant permission.
+  foreach ($taxonomy_permissions as $taxonomy_permission) {
+    if (!$role->hasPermission($taxonomy_permission)) {
+      $role->grantPermission($taxonomy_permission);
+      $role->save();
+    }
+  }
+}
+
+/**
+ * Grant permissions to manage nationality terms for sitemanager.
+ */
+function social_profile_fields_update_130001(): void {
+  $permissions = [
+    'create terms in nationality',
+    'delete terms in nationality',
+    'edit terms in nationality',
+  ];
+  user_role_grant_permissions('sitemanager', $permissions);
+}
+
+/**
+ * Hidden path from Nationality taxonomy.
+ */
+function social_profile_fields_update_130002(): void {
+  $storage = \Drupal::entityTypeManager()->getStorage('entity_form_display');
+  $form_display = $storage->load('taxonomy_term.nationality.default');
+
+  // If the entity-form-display isn't found, return early.
+  if (empty($form_display)) {
+    \Drupal::logger('social_profile_fields')->info('The entity-form-display from Nationality taxonomy is empty.');
+    return;
+  }
+
+  // Get fields and check if path is already be hidden.
+  $hidden = $form_display->get('hidden');
+  $content = $form_display->get('content');
+  if (in_array('path', array_keys($hidden))) {
+    \Drupal::logger('social_profile_fields')->info('The path field already is hidden on Nationality taxonomy.');
+    return;
+  }
+
+  // Manipulate path field to be hidden and save.
+  $hidden['path'] = TRUE;
+  unset($content['path']);
+  $form_display->set('hidden', $hidden)
+    ->set('content', $content)
+    ->save();
 }

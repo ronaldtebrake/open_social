@@ -5,13 +5,10 @@
  * Install/Uninstall/Update hooks for social_group_request module.
  */
 
-use Drupal\group\Entity\GroupType;
-use Symfony\Component\Yaml\Yaml;
-
 /**
  * Implements hook_install().
  */
-function social_group_request_install() {
+function social_group_request_install(): void {
   // Set some default permissions.
   _social_group_request_set_permissions();
 
@@ -19,47 +16,92 @@ function social_group_request_install() {
 }
 
 /**
- * Assign group request permission for closed and flexible group types.
+ * Implements hook_update_dependencies().
  */
-function _social_group_request_set_permissions() {
+function social_group_request_update_dependencies(): array {
+  // Ensure configurations updates runs after the group migration has completed.
+  $dependencies['social_group_request'][13000] = [
+    'social_group' => 13000,
+  ];
 
-  if (\Drupal::moduleHandler()->moduleExists('social_group_flexible_group')) {
-    $group_type = GroupType::load('flexible_group');
-    $group_type->getOutsiderRole()->grantPermissions(['request group membership'])->save();
-  }
+  $dependencies['social_group'][13001] = [
+    'social_group_request' => 13000,
+  ];
 
-  $group_type = GroupType::load('closed_group');
-  $group_type->getOutsiderRole()->grantPermissions(['request group membership'])->save();
+  $dependencies['social_group_request'][13001] = [
+    'group' => 9208,
+  ];
+
+  return $dependencies;
 }
 
 /**
- * Update the listed below message template files as per new email style.
- *
- * 1. message.template.approve_request_join_group
- * 2. message.template.request_to_join_a_group.
- *
- * Added new 'preview' and 'cta_button' tokens to these templates.
+ * Assign group request permission for closed and flexible group types.
  */
-function social_group_request_update_10301() {
-  // Prepare the path.
-  $path = drupal_get_path('module', 'social_group_request') . '/config/static/';
+function _social_group_request_set_permissions(): void {
+  if (\Drupal::moduleHandler()->moduleExists('social_group_flexible_group')) {
+    /** @var \Drupal\group\Entity\GroupRoleInterface $verified */
+    $verified = \Drupal::entityTypeManager()
+      ->getStorage('group_role')
+      ->load('flexible_group-verified');
+    $verified->grantPermission('request group membership')->save();
 
-  $message_templates = [
-    'message.template.approve_request_join_group' => $path . 'message.template.approve_request_join_group_10301.yml',
-    'message.template.request_to_join_a_group' => $path . 'message.template.request_to_join_a_group_10301.yml',
-  ];
-
-  // Retrieves the configuration factory.
-  $config_factory = \Drupal::configFactory();
-
-  // Update each template file.
-  foreach ($message_templates as $key => $config_file) {
-    if (is_file($config_file)) {
-      $settings = Yaml::parse(file_get_contents($config_file));
-      if (is_array($settings)) {
-        $config = $config_factory->getEditable($key);
-        $config->setData($settings)->save(TRUE);
-      }
-    }
+    /** @var \Drupal\group\Entity\GroupRoleInterface $group_manager */
+    $group_manager = \Drupal::entityTypeManager()
+      ->getStorage('group_role')
+      ->load('flexible_group-group_manager');
+    // Group managers should be able to manage membership requests.
+    $group_manager->grantPermissions([
+      'administer membership requests',
+      'view group_membership_request relationship',
+    ])->save();
   }
+}
+
+/**
+ * Implements hook_update_last_removed().
+ */
+function social_group_request_update_last_removed(): int {
+  return 10301;
+}
+
+/**
+ * Remove deprecated group types.
+ */
+function social_group_request_update_13000(): ?string {
+  // Allow platforms to opt out of the group migration, for example if they want
+  // to build it themselves and take more scenario's into account than common
+  // Open Social installations will have.
+  if (\Drupal::state()->get('social_group_group_type_migration_opt_out', FALSE)) {
+    \Drupal::logger('social_group')->info('Platform has opted out of group migration.');
+    return NULL;
+  }
+
+  /** @var \Drupal\update_helper\Updater $updateHelper */
+  $updateHelper = \Drupal::service('update_helper.updater');
+  $updateHelper->executeUpdate('social_group_request', __FUNCTION__);
+  return $updateHelper->logger()->output();
+}
+
+/**
+ * Group managers should be able to manage group memberships.
+ */
+function social_group_request_update_13001(): void {
+  /** @var \Drupal\group\Entity\GroupRoleInterface $group_manager */
+  $group_manager = \Drupal::entityTypeManager()
+    ->getStorage('group_role')
+    ->load('flexible_group-group_manager');
+  // Group managers should be able to manage membership requests.
+  $group_manager->grantPermission('view group_membership_request relationship')->save();
+}
+
+/**
+ * Add new group permissions to group-manager role.
+ */
+function social_group_request_update_13002(): void {
+  /** @var \Drupal\group\Entity\GroupRoleInterface $group_manager */
+  $group_manager = \Drupal::entityTypeManager()
+    ->getStorage('group_role')
+    ->load('flexible_group-group_manager');
+  $group_manager->grantPermission('administer membership requests')->save();
 }

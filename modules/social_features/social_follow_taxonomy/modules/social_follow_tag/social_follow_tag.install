@@ -5,9 +5,6 @@
  * Install, update functions for the social_follow_tag module.
  */
 
-use Drupal\Core\Config\FileStorage;
-use Symfony\Component\Yaml\Yaml;
-
 /**
  * Implements hook_install().
  *
@@ -21,188 +18,45 @@ function social_follow_tag_install() {
 }
 
 /**
- * Revert configs.
+ * Implements hook_uninstall().
  */
-function social_follow_tag_update_8801() {
-  $config_files = [
-    'message.template.update_node_following_tag',
+function social_follow_tag_uninstall(): void {
+  // Uninstall views filter configuration.
+  $config = \Drupal::configFactory()->getEditable('views.view.user_admin_people');
+  $config->clear('display.default.display_options.filters.social_follow_taxonomy_follow_filter');
+  $config->save();
+}
+
+/**
+ * Implements hook_update_dependencies().
+ */
+function social_follow_tag_update_dependencies(): array {
+  // Update 'social_follow_tag' after 'social_user'.
+  $dependencies['social_follow_tag'][12001] = [
+    'social_user' => 12002,
   ];
 
-  foreach ($config_files as $config_file) {
-    $config = drupal_get_path('module', 'social_follow_tag') . '/config/install/' . $config_file . '.yml';
+  return $dependencies;
 
-    if (is_file($config)) {
-      $settings = Yaml::parse(file_get_contents($config));
-      if (is_array($settings)) {
-        $update_config = \Drupal::configFactory()
-          ->getEditable($config_file);
-
-        $update_config->setData($settings)->save(TRUE);
-      }
-    }
-  }
 }
 
 /**
- * Update followtag block.
+ * Implements hook_update_last_removed().
  */
-function social_follow_tag_update_8802() {
-  $config_path = drupal_get_path('module', 'social_follow_tag') . '/config/optional';
-  $source = new FileStorage($config_path);
-  /** @var \Drupal\Core\Config\StorageCacheInterface $config_storage */
-  $config_storage = \Drupal::service('config.storage');
-  $config_storage->write('block.block.followtag', $source->read('block.block.followtag'));
+function social_follow_tag_update_last_removed() : int {
+  return 11801;
 }
 
 /**
- * Use enforced social_follow_tag module for configuration.
+ * Move 'Content tags' filter in related container in admin/people.
  */
-function social_follow_tag_update_8803() {
-  $config_path = drupal_get_path('module', 'social_follow_tag') . '/config/install';
-  $source = new FileStorage($config_path);
-  /** @var \Drupal\Core\Config\StorageCacheInterface $config_storage */
-  $config_storage = \Drupal::service('config.storage');
+function social_follow_tag_update_12001(): string {
+  /** @var \Drupal\update_helper\Updater $updateHelper */
+  $updateHelper = \Drupal::service('update_helper.updater');
 
-  // List of configs.
-  $configs = [
-    'message.template.create_node_following_tag',
-    'message.template.update_node_following_tag',
-  ];
+  // Execute configuration update definitions with logging of success.
+  $updateHelper->executeUpdate('social_follow_tag', __FUNCTION__);
 
-  foreach ($configs as $config) {
-    $config_storage->write($config, $source->read($config));
-  }
-}
-
-/**
- * Update template in existing messages.
- */
-function social_follow_tag_update_8804(array &$sandbox): void {
-  _social_follow_tag_update_existing_messages($sandbox);
-}
-
-/**
- * Helper callback to apply config updates.
- *
- * @param array $sandbox
- *   The update sandbox array.
- */
-function _social_follow_tag_update_existing_messages(array &$sandbox): void {
-  $message_storage = \Drupal::entityTypeManager()->getStorage('message');
-  if (!isset($sandbox['total'])) {
-    // Get all message IDs than should be updated.
-    $mids = $message_storage->getQuery()
-      ->condition('template', 'create_node_following_tag_stream')
-      ->execute();
-    if (empty($mids)) {
-      $sandbox['#finished'] = 1;
-      return;
-    }
-
-    // Set default params.
-    $sandbox['total'] = count($mids);
-    $sandbox['processed'] = 0;
-    $sandbox['mids'] = $mids;
-  }
-
-  $messages_per_batch = 50;
-  $mids = array_slice($sandbox['mids'], $sandbox['processed'], $messages_per_batch);
-
-  /** @var \Drupal\message\MessageInterface[] $messages */
-  $messages = $message_storage->loadMultiple($mids);
-
-  // Set new message template for existing messages.
-  foreach ($messages as $message) {
-    $message->set('template', 'create_node_following_tag');
-    $message->save();
-    $sandbox['processed']++;
-  }
-
-  $sandbox['#finished'] = $sandbox['processed'] / $sandbox['total'];
-}
-
-/**
- * Delete unnecessary message template.
- */
-function social_follow_tag_update_8805() {
-  \Drupal::entityTypeManager()
-    ->getStorage('message_template')
-    ->load('create_node_following_tag_stream')
-    ->delete();
-}
-
-/**
- * Update message template for follow tag.
- */
-function social_follow_tag_update_8806() {
-  /** @var \Drupal\message\MessageTemplateInterface $message_template */
-  $message_template = \Drupal::entityTypeManager()
-    ->getStorage('message_template')
-    ->load('create_node_following_tag');
-  $destinations = [
-    'notifications' => 'notifications',
-    'email' => 'email',
-  ];
-  $message_template->setThirdPartySetting('activity_logger', 'activity_destinations', $destinations);
-  $text = [];
-  for ($i = 0; $i <= 2; ++$i) {
-    $text[$i]['value'] = '<p><a href="[message:author:url:absolute]">[message:author:display-name]</a> created [social_taxonomy:indefinite_article] [social_taxonomy:content_type] <a href="[message:field_message_related_object:entity:url:absolute]">[message:node-title]</a> with the tag(s) that you follow.</p>';
-    $text[$i]['format'] = 'full_html';
-  }
-  $message_template->set('text', $text);
-  $message_template->save();
-}
-
-/**
- * Update message template "message.template.update_node_following_tag".
- *
- * Added new 'preview' and 'cta_button' tokens.
- */
-function social_follow_tag_update_10301() {
-  $config_file = drupal_get_path('module', 'social_follow_tag') . '/config/static/message.template.update_node_following_tag_10301.yml';
-  if (is_file($config_file)) {
-    $settings = Yaml::parse(file_get_contents($config_file));
-    if (is_array($settings)) {
-      $config = \Drupal::configFactory()
-        ->getEditable('message.template.update_node_following_tag');
-      $config->setData($settings)->save(TRUE);
-    }
-  }
-}
-
-/**
- * Update message template "message.template.create_node_following_tag_stream".
- *
- * Added new 'preview' and 'cta_button' tokens.
- */
-function social_follow_tag_update_10302() {
-  $config_file = drupal_get_path('module', 'social_follow_tag') . '/config/static/message.template.create_node_following_tag_stream_10302.yml';
-  if (is_file($config_file)) {
-    $settings = Yaml::parse(file_get_contents($config_file));
-    if (is_array($settings)) {
-      $config = \Drupal::configFactory()
-        ->getEditable('message.template.create_node_following_tag_stream');
-      $config->setData($settings)->save(TRUE);
-    }
-  }
-}
-
-/**
- * Revert "message.template.create_node_following_tag_stream" config.
- */
-function social_follow_tag_update_10303(array &$sandbox): void {
-  _social_follow_tag_update_existing_messages($sandbox);
-}
-
-/**
- * Delete "message.template.create_node_following_tag_stream" config.
- */
-function social_follow_tag_update_10304(array &$sandbox): void {
-  $message_template = \Drupal::entityTypeManager()
-    ->getStorage('message_template')
-    ->load('create_node_following_tag_stream');
-
-  if (!is_null($message_template)) {
-    $message_template->delete();
-  }
+  // Output logged messages to related channel of update execution.
+  return $updateHelper->logger()->output();
 }

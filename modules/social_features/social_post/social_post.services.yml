@@ -11,3 +11,14 @@ services:
   social_post.helper:
     class: Drupal\social_post\Service\SocialPostHelper
     arguments: ['@entity_type.manager', '@current_user']
+  Drupal\social_post\Service\SocialPostHelperInterface: '@social_post.helper'
+
+  # hooks replacement
+  # use autowiring for arguments for `SocialPostFormHooks`
+  social_post.form.hooks:
+    class: Drupal\social_post\Hooks\SocialPostFormHooks
+    autowire: true
+    tags:
+      - { name: hooks }
+  # make `SocialPostFormHooks` injectable in another service (e.g. for decoration)
+  Drupal\social_post\Hooks\SocialPostFormHooks: '@social_post.form.hooks'

@@ -64,7 +64,7 @@ class FlexibleGroupContentVisibilityUpdate {
     // Load all the GroupContentEntities from Post to content.
     // Memberships don't need an update.
     $entities = $posts = [];
-    $entities = $group->getContentEntities();
+    $entities = $group->getRelatedEntities();
     $posts = self::getPostsFromGroup($group);
 
     // Add posts to the entities we need to update based on visibility.
@@ -104,7 +104,7 @@ class FlexibleGroupContentVisibilityUpdate {
   /**
    * Update visibility for all Group Content based on a new group type.
    *
-   * @param \Drupal\node\Entity\Node|\Drupal\social_post\Entity\Post|\Drupal\group\GroupMembership|\Drupal\group\Entity\GroupContentInterface $entity
+   * @param \Drupal\node\Entity\Node|\Drupal\social_post\Entity\Post|\Drupal\group\Entity\GroupMembership|\Drupal\group\Entity\GroupRelationshipInterface $entity
    *   The content we are updating.
    * @param array $new_options
    *   The Group's new visibility options.
@@ -113,7 +113,7 @@ class FlexibleGroupContentVisibilityUpdate {
    *
    * @throws \Drupal\Core\Entity\EntityStorageException
    */
-  public function updateVisibility($entity, array $new_options, array &$context) {
+  public static function updateVisibility($entity, array $new_options, array &$context) {
     // Store some results for post-processing in the 'finished' callback.
     // The contents of 'results' will be available as $results in the
     // 'finished' function updateVisibilityFinishedCallback().
@@ -128,7 +128,7 @@ class FlexibleGroupContentVisibilityUpdate {
       $entity->save();
     }
 
-    // Make sure our GroupContent referenced entities also get invalidated.
+    // Make sure our GroupRelationship referenced entities also get invalidated.
     $tags = $entity->getCacheTagsToInvalidate();
     Cache::invalidateTags($tags);
 
@@ -217,7 +217,6 @@ class FlexibleGroupContentVisibilityUpdate {
       return reset($new_options)['value'];
     }
 
-    /** @var \Drupal\user\RoleInterface $role */
     $role = \Drupal::entityTypeManager()->getStorage('user_role')->load($current_visibility);
     if ($role instanceof RoleInterface) {
       return reset($new_options)['value'];
@@ -225,6 +224,13 @@ class FlexibleGroupContentVisibilityUpdate {
 
     $visibility = '';
     $option_values = array_column($new_options, 'value');
+
+    // Keep the current visibility of group content items if it's still
+    // available in the group content visibility options.
+    if (in_array($current_visibility, $option_values)) {
+      return $current_visibility;
+    }
+
     // Calculate new options based on what it was before editting.
     switch ($current_visibility) {
       case 'community':

@@ -54,13 +54,12 @@ function social_group_request_tokens($type, $tokens, array $data, array $options
             $target_id = $message->getFieldValue('field_message_related_object', 'target_id');
 
             if (isset($target_type) && !empty($target_type) && $target_type === 'group_content') {
-              /** @var \Drupal\group\Entity\GroupContentInterface $group_content */
               $group_content = \Drupal::entityTypeManager()
                 ->getStorage($target_type)
                 ->load($target_id);
 
-              if (!empty($group_content)) {
-                $replacements[$original] = Url::fromRoute('view.group_pending_members.membership_requests', ['arg_0' => $group_content->getGroup()->id()])->toString();
+              if ($group_content !== NULL) {
+                $replacements[$original] = Url::fromRoute('view.group_pending_members.membership_requests', ['group' => $group_content->getGroup()->id()])->toString();
               }
             }
           }
@@ -77,6 +76,11 @@ function social_group_request_tokens($type, $tokens, array $data, array $options
  */
 function social_group_request_tokens_alter(array &$replacements, array $context, BubbleableMetadata $bubbleable_metadata) {
   if ($context['type'] == 'message' && !empty($context['data']['message'])) {
+    // Translate hook_tokens options to the options for TranslatableMarkup.
+    $translation_options = [
+      'langcode' => $context['options']['langcode'] ?? NULL,
+    ];
+
     /** @var Drupal\message\Entity\Message $message */
     $message = $context['data']['message'];
 
@@ -89,7 +93,7 @@ function social_group_request_tokens_alter(array &$replacements, array $context,
         $email_token_services = \Drupal::service('social_activity.email_token_services');
 
         if (!empty($group_content = $email_token_services->getRelatedObject($message)) && $group_content->getEntityTypeId() == 'group_content') {
-          /** @var \Drupal\group\Entity\GroupContentInterface $group_content */
+          /** @var \Drupal\group\Entity\GroupRelationshipInterface $group_content */
           // Get the group entity.
           $group = $group_content->getGroup();
           if ($group instanceof Group) {
@@ -97,11 +101,11 @@ function social_group_request_tokens_alter(array &$replacements, array $context,
             switch ($message_template_id) {
               case 'request_to_join_a_group':
                 if (isset($context['tokens']['cta_button'])) {
-                  $link = Url::fromRoute('view.group_pending_members.membership_requests', ['arg_0' => $group->id()],
+                  $link = Url::fromRoute('view.group_pending_members.membership_requests', ['group' => $group->id()],
                     ['absolute' => TRUE]);
-                  $cta_button = $email_token_services->getCtaButton($link, new TranslatableMarkup('View the requests'));
+                  $cta_button = $email_token_services->getCtaButton($link, new TranslatableMarkup('View the requests', [], $translation_options));
                   $replacements[$context['tokens']['cta_button']] = \Drupal::service('renderer')
-                    ->renderPlain($cta_button);
+                    ->renderInIsolation($cta_button);
                 }
 
                 // Replace the preview token.
@@ -110,7 +114,7 @@ function social_group_request_tokens_alter(array &$replacements, array $context,
                   $user = $group_content->getEntity();
                   if ($user instanceof UserInterface) {
                     $preview_info = $email_token_services->getUserPreview($user);
-                    $replacements[$context['tokens']['preview']] = \Drupal::service('renderer')->renderPlain($preview_info);
+                    $replacements[$context['tokens']['preview']] = \Drupal::service('renderer')->renderInIsolation($preview_info);
                   }
                 }
                 break;

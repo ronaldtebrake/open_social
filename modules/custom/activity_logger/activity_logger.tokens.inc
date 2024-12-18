@@ -9,7 +9,7 @@ use Drupal\Core\Entity\FieldableEntityInterface;
 use Drupal\Core\Render\BubbleableMetadata;
 use Drupal\Core\Url;
 use Drupal\group\Entity\Group;
-use Drupal\group\Entity\GroupContent;
+use Drupal\group\Entity\GroupRelationship;
 use Drupal\message\Entity\Message;
 use Drupal\node\Entity\Node;
 use Drupal\Core\Language\LanguageInterface;
@@ -109,7 +109,7 @@ function activity_logger_tokens($type, $tokens, array $data, array $options, Bub
                 }
 
                 // Try to get the group.
-                $group_content = GroupContent::loadByEntity($entity);
+                $group_content = GroupRelationship::loadByEntity($entity);
                 if (!empty($group_content)) {
                   $group_content = reset($group_content);
                   $group = $group_content->getGroup();
@@ -190,6 +190,7 @@ function activity_logger_tokens($type, $tokens, array $data, array $options, Bub
                   // Get the related message.
                   $target_type = $message->getFieldValue('field_message_related_object', 'target_type');
                   $target_id = $message->getFieldValue('field_message_related_object', 'target_id');
+                  /** @var \Drupal\private_message\Entity\PrivateMessageInterface $entity */
                   $entity = \Drupal::entityTypeManager()
                     ->getStorage($target_type)
                     ->load($target_id);

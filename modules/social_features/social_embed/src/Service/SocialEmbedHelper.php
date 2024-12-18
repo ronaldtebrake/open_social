@@ -2,10 +2,11 @@
 
 namespace Drupal\social_embed\Service;
 
+use Drupal\Component\Uuid\UuidInterface;
+use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\Core\Render\Renderer;
 use Drupal\Core\Session\AccountProxyInterface;
 use Drupal\filter\FilterProcessResult;
-use Drupal\Component\Uuid\UuidInterface;
 
 /**
  * Service class for Social Embed.
@@ -34,6 +35,13 @@ class SocialEmbedHelper {
   protected Renderer $renderer;
 
   /**
+   * The module handler service.
+   *
+   * @var \Drupal\Core\Extension\ModuleHandlerInterface
+   */
+  protected ModuleHandlerInterface $moduleHandler;
+
+  /**
    * Constructor for SocialEmbedHelper.
    *
    * @param \Drupal\Component\Uuid\UuidInterface $uuid_generator
@@ -42,11 +50,14 @@ class SocialEmbedHelper {
    *   Current user object.
    * @param \Drupal\Core\Render\Renderer $renderer
    *   Renderer services.
+   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
+   *   The module handler service.
    */
-  public function __construct(UuidInterface $uuid_generator, AccountProxyInterface $current_user, Renderer $renderer) {
+  public function __construct(UuidInterface $uuid_generator, AccountProxyInterface $current_user, Renderer $renderer, ModuleHandlerInterface $module_handler) {
     $this->uuidGenerator = $uuid_generator;
     $this->currentUser = $current_user;
     $this->renderer = $renderer;
+    $this->moduleHandler = $module_handler;
   }
 
   /**
@@ -90,28 +101,20 @@ class SocialEmbedHelper {
   }
 
   /**
-   * Checks if item is on the whitelist.
+   * Checks if a given URL is whitelisted.
    *
-   * @param string $text
-   *   The item to check for.
+   * @param string $url
+   *   The URL to check.
    *
    * @return bool
-   *   Return if the item is on the whitelist or not.
+   *   Returns TRUE if the URL is whitelisted, otherwise FALSE.
    */
-  public function whiteList($text) {
+  public function isWhitelisted(string $url): bool {
     // Fetch allowed patterns.
-    $patterns = $this->getPatterns();
+    $patterns = $this->getCombinedPatterns();
 
-    // Check if the URL provided is from a whitelisted site.
-    foreach ($patterns as $pattern) {
-      // Testing pattern.
-      $testing_pattern = '/' . $pattern . '/';
-      // Check if it matches.
-      if (preg_match($testing_pattern, $text)) {
-        return TRUE;
-      }
-    }
-    return FALSE;
+    // Check if the URL matches any of the allowed patterns.
+    return preg_match($patterns, $url) === 1;
   }
 
   /**
@@ -120,21 +123,39 @@ class SocialEmbedHelper {
    * @return array
    *   The list of patterns.
    */
-  private function getPatterns() {
+  public function getPatterns(): array {
     return [
-      'facebook.com\/(.*)\/videos\/(.*)',
-      'facebook.com\/(.*)\/photos\/(.*)',
-      'facebook.com\/(.*)\/posts\/(.*)',
-      'flickr.com\/photos\/(.*)',
-      'flic.kr\/p\/(.*)',
-      'instagram.com\/p\/(.*)',
-      'open.spotify.com\/track\/(.*)',
-      'twitter.com\/(.*)\/status\/(.*)',
-      'vimeo.com\/\d{7,9}',
-      'youtube.com\/watch[?]v=(.*)',
-      'youtu.be\/(.*)',
-      'ted.com\/talks\/(.*)',
+      '(facebook.com\/(.*)\/videos\/(.*))',
+      '(facebook.com\/(.*)\/photos\/(.*))',
+      '(facebook.com\/(.*)\/posts\/(.*))',
+      '(flickr.com\/photos\/(.*))',
+      '(flic.kr\/p\/(.*))',
+      '(instagram.com\/p\/(.*))',
+      '(open.spotify.com\/track\/(.*))',
+      '(twitter.com\/(.*)\/status\/(.*))',
+      '(x.com\/(.*)\/status\/(.*))',
+      '(vimeo.com\/[a-zA-Z0-9]+(?:\/[a-zA-Z0-9]+)?\/?)',
+      '(youtube.com\/watch[?]v=(.*))',
+      '(youtu.be\/(.*))',
+      '(ted.com\/talks\/(.*))',
     ];
+  }
+
+  /**
+   * The combined version of the patterns.
+   *
+   * @return string
+   *   The string of combined patterns.
+   */
+  public function getCombinedPatterns(): string {
+    // Fetch allowed patterns.
+    $patterns = $this->getPatterns();
+
+    // Combine the patterns in a single string.
+    $combined_patterns = implode('|', $patterns);
+
+    // Return the combined version of the patterns.
+    return "/\b(?:https?:\/\/)?(?:www\.)?($combined_patterns)/i";
   }
 
   /**
@@ -150,7 +171,7 @@ class SocialEmbedHelper {
    *
    * @throws \Exception
    */
-  public function getPlaceholderMarkupForProvider(string $provider, string $url) :string {
+  public function getPlaceholderMarkupForProvider(string $provider, string $url): string {
     // Generate a unique identifier, this will help our ajax call to understand
     // which placeholder to replace when a user gives consent.
     $uuid = $this->uuidGenerator->generate();
@@ -165,23 +186,25 @@ class SocialEmbedHelper {
     $output[] = [
       '#type' => 'inline_template',
       '#template' => '<div class="social-embed-container" id="social-embed-placeholder">
-                <div id="social-embed-iframe-{{ uuid }}" class="social-embedded-btn social-embed-iframe-{{ provider_class }}">
-                <svg class="badge__icon"><use xlink:href="#icon-visibility_off"></use></svg>
-                  <p class="social-embed-placeholder-body">{% trans %} By clicking show content, you agree to load the embedded content from <b>"{{ provider }}"</b> and therefore its privacy policy. {% endtrans %}<p>
-                  <div><a class="use-ajax btn btn-primary waves-effect waves-btn social-embed-placeholder-btn" href="/api/opensocial/social-embed/generate?url={{ url }}&uuid={{ uuid }}">{% trans %} Show content {% endtrans %}</a></div>
-                  {% if uid %}
-                  <div><a class="social-embed-content-settings" href="/user/{{ uid }}/edit">{% trans %} View and edit embedded content settings {% endtrans %}</a></div>
-                  {% endif %}
-                </div>
-              </div>',
+        <div id="social-embed-iframe-{{ uuid }}" class="social-embedded-btn social-embed-iframe-{{ provider_class }}">
+          <svg class="badge__icon"><use xlink:href="#icon-visibility_off"></use></svg>
+          <p class="social-embed-placeholder-body">{% trans %} By clicking show content, you agree to load the embedded content from <b>"{{ provider }}"</b> and therefore its privacy policy. {% endtrans %}<p>
+          <div><a class="use-ajax btn btn-primary waves-effect waves-btn social-embed-placeholder-btn" href="/api/opensocial/social-embed/generate?url={{ url }}&uuid={{ uuid }}">{% trans %} Show content {% endtrans %}</a></div>
+          {% if show_edit_link %}
+          <div><a class="social-embed-content-settings" href="/user/{{ uid }}/edit">{% trans %} View and edit embedded content settings {% endtrans %}</a></div>
+          {% endif %}
+        </div>
+      </div>',
       '#context' => [
         'uuid' => $uuid,
         'provider' => $provider,
         'provider_class' => $provider_class,
         'url' => $url,
-        'uid' => $uid,
+        'show_edit_link' => $uid,
       ],
     ];
+
+    $this->moduleHandler->alter('social_embed_placeholder', $output);
 
     return $this->renderer->render($output);
   }

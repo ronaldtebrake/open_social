@@ -12,11 +12,6 @@ use Drupal\comment\CommentViewBuilder;
 class SocialCommentViewBuilder extends CommentViewBuilder {
 
   /**
-   * The pager tag.
-   */
-  const PAGER_TAG = 'comments';
-
-  /**
    * {@inheritdoc}
    */
   protected function alterBuild(array &$build, EntityInterface $comment, EntityViewDisplayInterface $display, $view_mode) {
@@ -40,7 +35,7 @@ class SocialCommentViewBuilder extends CommentViewBuilder {
       // Add indentation div or close open divs as needed.
       if ($build['#comment_threaded']) {
         if ($build['#comment_indent'] <= 0) {
-          $prefix .= str_repeat('</div>', abs($build['#comment_indent']));
+          $prefix .= str_repeat('</div>', (int) abs($build['#comment_indent']));
         }
 
         // We are in a thread of comments.
@@ -77,9 +72,11 @@ class SocialCommentViewBuilder extends CommentViewBuilder {
   public function buildMultiple(array $build_list) {
     $build_list = parent::buildMultiple($build_list);
 
-    $tags = $build_list['pager']['#tags'] ?? [];
-    $tags[] = self::PAGER_TAG;
-    $build_list['pager']['#tags'] = $tags;
+    // Tell to social_ajax_comments_preprocess_pager() make pager works
+    // with ajax.
+    if ($this->moduleHandler->moduleExists('social_ajax_comments')) {
+      $build_list['pager']['#ajaxify'] = TRUE;
+    }
 
     return $build_list;
   }

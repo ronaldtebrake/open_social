@@ -67,7 +67,9 @@ function social_follow_taxonomy_tokens($type, $tokens, array $data, array $optio
     foreach ($tokens as $name => $original) {
       switch ($name) {
         case 'content_type':
+        case 'content_type:capitalized':
         case 'indefinite_article':
+        case 'indefinite_article:capitalized':
         case 'taxonomy_i_follow':
           /** @var \Drupal\message\Entity\Message $message */
           $message = $data['message'];
@@ -121,11 +123,15 @@ function social_follow_taxonomy_tokens($type, $tokens, array $data, array $optio
             }
           }
 
-          if ($name === 'content_type') {
+          if ($display_name && str_ends_with($name, ':capitalized')) {
+            $display_name = ucfirst($display_name);
+          }
+
+          if (str_starts_with($name, 'content_type')) {
             $replacements[$original] = $display_name;
           }
 
-          if ($name === 'indefinite_article') {
+          if (str_starts_with($name, 'indefinite_article')) {
             if (!empty($display_name)) {
               // Prepares a replacement token: content name.
               // When a name of content name starts from a vowel letter then
@@ -136,6 +142,7 @@ function social_follow_taxonomy_tokens($type, $tokens, array $data, array $optio
               else {
                 $indefinite_article = t('a');
               }
+
               $replacements[$original] = $indefinite_article;
             }
             else {
@@ -143,7 +150,7 @@ function social_follow_taxonomy_tokens($type, $tokens, array $data, array $optio
             }
           }
 
-          if ($name === 'taxonomy_i_follow' && !empty($term_names)) {
+          if (str_starts_with($name, 'taxonomy_i_follow') && !empty($term_names)) {
             // Prepares a replacement token: a string with term names.
             // Wrap the names in quotation marks and separate it with commas.
             $replacement_string = "'" . implode("', '", $term_names) . "'";
@@ -194,6 +201,11 @@ function social_follow_taxonomy_tokens($type, $tokens, array $data, array $optio
  */
 function social_follow_taxonomy_tokens_alter(array &$replacements, array $context, BubbleableMetadata $bubbleable_metadata) {
   if ($context['type'] == 'message' && !empty($context['data']['message'])) {
+    // Translate hook_tokens options to the options for TranslatableMarkup.
+    $translation_options = [
+      'langcode' => $context['options']['langcode'] ?? NULL,
+    ];
+
     /** @var Drupal\message\Entity\Message $message */
     $message = $context['data']['message'];
 
@@ -212,9 +224,9 @@ function social_follow_taxonomy_tokens_alter(array &$replacements, array $contex
             case 'update_node_following_tag':
               if (isset($context['tokens']['cta_button'])) {
                 $link = $entity->toUrl('canonical', ['absolute' => TRUE]);
-                $cta_button = $email_token_services->getCtaButton($link, new TranslatableMarkup('Read more about it'));
+                $cta_button = $email_token_services->getCtaButton($link, new TranslatableMarkup('Read more about it', [], $translation_options));
                 $replacements[$context['tokens']['cta_button']] = \Drupal::service('renderer')
-                  ->renderPlain($cta_button);
+                  ->renderInIsolation($cta_button);
               }
 
               // Replace the preview token.
@@ -232,7 +244,7 @@ function social_follow_taxonomy_tokens_alter(array &$replacements, array $contex
                     break;
                 }
                 $replacements[$context['tokens']['preview']] = \Drupal::service('renderer')
-                  ->renderPlain($preview_info);
+                  ->renderInIsolation($preview_info);
               }
               break;
           }

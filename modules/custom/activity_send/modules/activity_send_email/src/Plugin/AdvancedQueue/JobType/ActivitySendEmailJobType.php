@@ -17,6 +17,7 @@ use Drupal\Core\Language\LanguageManager;
 use Drupal\Core\Logger\LoggerChannelTrait;
 use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
 use Drupal\Core\Queue\QueueFactory;
+use Drupal\social_core\Service\ConfigLanguageManager;
 use Drupal\user\Entity\User;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 
@@ -60,7 +61,7 @@ class ActivitySendEmailJobType extends JobTypeBase implements ContainerFactoryPl
    *
    * @var \Drupal\Core\Config\ImmutableConfig
    */
-  protected $swiftmailSettings;
+  protected $socialMailerSettings;
 
   /**
    * The entity type manager.
@@ -84,6 +85,13 @@ class ActivitySendEmailJobType extends JobTypeBase implements ContainerFactoryPl
   protected $languageManager;
 
   /**
+   * The config language manager object.
+   *
+   * @var \Drupal\social_core\Service\ConfigLanguageManager
+   */
+  protected ConfigLanguageManager $configLanguageManager;
+
+  /**
    * {@inheritdoc}
    */
   public function __construct(
@@ -96,16 +104,18 @@ class ActivitySendEmailJobType extends JobTypeBase implements ContainerFactoryPl
     ConfigFactoryInterface $config_factory,
     EntityTypeManagerInterface $entity_type_manager,
     QueueFactory $queue_factory,
-    LanguageManager $language_manager
+    LanguageManager $language_manager,
+    ConfigLanguageManager $config_language_manager
   ) {
     parent::__construct($configuration, $plugin_id, $plugin_definition);
     $this->frequencyManager = $frequency_manager;
     $this->database = $connection;
     $this->activityNotifications = $activity_notifications;
-    $this->swiftmailSettings = $config_factory->get('social_swiftmail.settings');
+    $this->socialMailerSettings = $config_factory->get('social_swiftmail.settings');
     $this->entityTypeManager = $entity_type_manager;
     $this->queueFactory = $queue_factory;
     $this->languageManager = $language_manager;
+    $this->configLanguageManager = $config_language_manager;
   }
 
   /**
@@ -122,7 +132,8 @@ class ActivitySendEmailJobType extends JobTypeBase implements ContainerFactoryPl
       $container->get('config.factory'),
       $container->get('entity_type.manager'),
       $container->get('queue'),
-      $container->get('language_manager')
+      $container->get('language_manager'),
+      $container->get('social_core.config_language_manager')
     );
   }
 
@@ -157,7 +168,7 @@ class ActivitySendEmailJobType extends JobTypeBase implements ContainerFactoryPl
             if ($is_multilingual) {
               // We also want to send emails to users per language in a given
               // frequency.
-              foreach ($languages = $this->languageManager->getLanguages() as $language) {
+              foreach ($this->languageManager->getLanguages() as $language) {
                 $langcode = $language->getId();
                 // Load all user by given language.
                 $user_ids_per_language = $this->database->select('users_field_data', 'ufd')
@@ -237,7 +248,7 @@ class ActivitySendEmailJobType extends JobTypeBase implements ContainerFactoryPl
           // manager. If SM has also not set, take 'immediately' as frequency.
           if ($remaining_users = array_diff($recipients, $processed_users)) {
             // Grab the platform default "Email notification frequencies".
-            $template_frequencies = $this->swiftmailSettings->get('template_frequencies') ?: [];
+            $template_frequencies = $this->socialMailerSettings->get('template_frequencies') ?: [];
             // Determine email frequency to use, defaults to immediately.
             $parameters['frequency'] = $template_frequencies[$message_template_id] ?? FREQUENCY_IMMEDIATELY;
             $parameters['target_recipients'] = $remaining_users;
@@ -247,7 +258,7 @@ class ActivitySendEmailJobType extends JobTypeBase implements ContainerFactoryPl
       }
 
       // Mark the Job as successful.
-      $this->getLogger('activity_send_email_worker')->notice('The job was finished correctly.');
+      $this->getLogger('activity_send_email_worker')->info('The job was finished correctly.');
       return JobResult::success('The job was finished correctly.');
     }
     catch (\Exception $e) {
@@ -274,7 +285,9 @@ class ActivitySendEmailJobType extends JobTypeBase implements ContainerFactoryPl
     $user_storage = $this->entityTypeManager->getStorage('user');
     if (!empty($parameters['langcode'])) {
       // Get the message text according to language.
+      $this->configLanguageManager->stringTranslationOverrideLanguageStart($parameters['langcode']);
       $body_text = EmailActivityDestination::getSendEmailOutputText($parameters['message'], $parameters['langcode']);
+      $this->configLanguageManager->stringTranslationOverrideLanguageEnd();
     }
     else {
       // We get the default body text.
@@ -290,7 +303,7 @@ class ActivitySendEmailJobType extends JobTypeBase implements ContainerFactoryPl
           // If a site manager decides emails should not be sent to users
           // who have never logged in. We need to verify last accessed time,
           // so those users are not processed.
-          if ($this->swiftmailSettings->get('do_not_send_emails_new_users') && (int) $target_account->getLastAccessedTime() === 0) {
+          if ($this->socialMailerSettings->get('do_not_send_emails_new_users') && (int) $target_account->getLastAccessedTime() === 0) {
             continue;
           }
           // Only for users that have access to related content.
@@ -300,14 +313,18 @@ class ActivitySendEmailJobType extends JobTypeBase implements ContainerFactoryPl
             // is not processed in a batch and thus we can't be sure if all
             // users in the queue have the same language.
             if (empty($parameters['langcode']) && $this->languageManager->isMultilingual()) {
+              $this->configLanguageManager->stringTranslationOverrideLanguageStart($target_account->getPreferredLangcode());
               $body_text = EmailActivityDestination::getSendEmailOutputText(
                 $parameters['message'],
                 $target_account->getPreferredLangcode()
               );
+              $this->configLanguageManager->stringTranslationOverrideLanguageEnd();
             }
             // Send item to EmailFrequency instance.
-            $instance = $this->frequencyManager->createInstance($parameters['frequency']);
-            $instance->processItem($parameters['activity'], $parameters['message'], $target_account, $body_text);
+            if ($this->frequencyManager->hasDefinition($parameters['frequency'])) {
+              $instance = $this->frequencyManager->createInstance($parameters['frequency']);
+              $instance->processItem($parameters['activity'], $parameters['message'], $target_account, $body_text);
+            }
           }
         }
       }

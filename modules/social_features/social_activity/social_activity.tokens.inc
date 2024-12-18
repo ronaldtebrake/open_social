@@ -7,9 +7,10 @@
 
 use Drupal\Core\Render\BubbleableMetadata;
 use Drupal\Core\StringTranslation\TranslatableMarkup;
-use Drupal\group\Entity\GroupContentInterface;
+use Drupal\group\Entity\GroupRelationshipInterface;
 use Drupal\message\Entity\Message;
 use Drupal\node\NodeInterface;
+use Drupal\user\EntityOwnerInterface;
 
 /**
  * Implements hook_token_info().
@@ -37,6 +38,11 @@ function social_activity_token_info() {
     'description' => t('Number of groups where node is added.'),
   ];
 
+  $tokens['revision_author'] = [
+    'name' => t("Author"),
+    'type' => 'user',
+  ];
+
   return [
     'tokens' => [
       'message' => $tokens,
@@ -51,6 +57,11 @@ function social_activity_tokens($type, $tokens, array $data, array $options, Bub
   $replacements = [];
 
   if ($type === 'message' && !empty($data['message'])) {
+    // Translate hook_tokens options to the options for TranslatableMarkup.
+    $translation_options = [
+      'langcode' => $options['langcode'] ?? NULL,
+    ];
+
     /** @var \Drupal\message\Entity\Message $message */
     $message = $data['message'];
 
@@ -78,7 +89,7 @@ function social_activity_tokens($type, $tokens, array $data, array $options, Bub
           $preview_info = $email_token_services->getPostPreview($entity);
 
           // Prepare CTA button information.
-          $cta_button = $email_token_services->getCtaButton($link, new TranslatableMarkup('Leave a comment'));
+          $cta_button = $email_token_services->getCtaButton($link, new TranslatableMarkup('Leave a comment', [], $translation_options));
 
           // This is for token deprecated token 'additional_information'.
           $additional_information = [
@@ -89,7 +100,7 @@ function social_activity_tokens($type, $tokens, array $data, array $options, Bub
             '#link' => $link,
           ];
         }
-        elseif ($entity->getEntityTypeId() === 'group_content' && $entity instanceof GroupContentInterface) {
+        elseif ($entity->getEntityTypeId() === 'group_content' && $entity instanceof GroupRelationshipInterface) {
           /** @var \Drupal\node\Entity\Node $node */
           $node = $entity->getEntity();
           if ($node instanceof NodeInterface) {
@@ -99,7 +110,7 @@ function social_activity_tokens($type, $tokens, array $data, array $options, Bub
             $link = $node->toUrl('canonical', ['absolute' => TRUE]);
 
             // Prepare the CTA button markup.
-            $cta_button = $email_token_services->getCtaButton($link, new TranslatableMarkup('Read more'));
+            $cta_button = $email_token_services->getCtaButton($link, new TranslatableMarkup('Read more', [], $translation_options));
 
             // This is for token deprecated token 'additional_information'.
             $additional_information = [
@@ -117,7 +128,7 @@ function social_activity_tokens($type, $tokens, array $data, array $options, Bub
             // will be removed in 11.x release of Open Social.
             case 'additional_information':
               if (!empty($additional_information)) {
-                $replacements[$original] = \Drupal::service('renderer')->renderPlain($additional_information);
+                $replacements[$original] = \Drupal::service('renderer')->renderInIsolation($additional_information);
               }
               break;
 
@@ -139,16 +150,48 @@ function social_activity_tokens($type, $tokens, array $data, array $options, Bub
 
             case 'preview':
               if (!empty($preview_info)) {
-                $replacements[$original] = \Drupal::service('renderer')->renderPlain($preview_info);
+                $replacements[$original] = \Drupal::service('renderer')->renderInIsolation($preview_info);
               }
               break;
 
             case 'cta_button':
               if (!empty($cta_button)) {
-                $replacements[$original] = \Drupal::service('renderer')->renderPlain($cta_button);
+                $replacements[$original] = \Drupal::service('renderer')->renderInIsolation($cta_button);
               }
               break;
           }
+        }
+
+        // Loading user data to user token as "object".
+        $token_service = \Drupal::token();
+        if ($author_tokens = $token_service->findWithPrefix($tokens, 'revision_author')) {
+          if ($message->field_message_related_object->isEmpty()) {
+            return $replacements;
+          }
+
+          // Get related content to change tokens.
+          $related_object_value = current($message->field_message_related_object->getValue());
+          $related_object_content = \Drupal::entityTypeManager()
+            ->getStorage($related_object_value['target_type'])
+            ->load($related_object_value['target_id']);
+          if (empty($related_object_content)) {
+            return $replacements;
+          }
+
+          // Get the Entity when the entity type is group_content.
+          // The owner from group_content didn't update, so is outdated.
+          if (
+            $related_object_content->getEntityTypeId() === 'group_content'
+            && method_exists($related_object_content, 'getEntity')
+          ) {
+            $related_object_content = $related_object_content->getEntity();
+          }
+
+          if ($related_object_content instanceof EntityOwnerInterface) {
+            $replacements += $token_service->generate('user', $author_tokens, ['user' => $related_object_content->getOwner()], $options, $bubbleable_metadata);
+          }
+
+          return $replacements;
         }
       }
     }

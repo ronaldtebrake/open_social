@@ -40,6 +40,8 @@ class Route extends RouteSubscriberBase {
       'social_group.stream',
       'view.group_events.page_group_events',
       'view.group_topics.page_group_topics',
+      'view.group_books.page_group_books',
+      'view.albums.page_group_albums_overview',
     ];
 
     // Invoke implementations of
@@ -55,6 +57,7 @@ class Route extends RouteSubscriberBase {
         $route->addRequirements($requirements);
       }
     }
+
   }
 
 }

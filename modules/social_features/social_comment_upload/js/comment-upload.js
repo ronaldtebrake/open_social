@@ -1,10 +1,14 @@
-(function ($) {
+(function (Drupal, $, once) {
 
   'use strict';
 
   Drupal.behaviors.socialCommentUpload = {
     attach: function(context, setting) {
-      $('.comment-attachments').once('socialCommentUpload').each(function () {
+
+      // The once call is wrapped in $() to allow the usual jQuery chaining.
+      const $socialCommentUploadOnce = $(once('socialCommentUpload', '.comment-attachments'));
+      // `$elements` is always a jQuery object.
+      $socialCommentUploadOnce.each(function () {
         var $content = $('> div', this).filter(function () {
             return !$(this).hasClass('panel-heading');
           }),
@@ -28,7 +32,10 @@
       var $pswp = $('.pswp')[0];
       var image = [];
 
-      $('.photoswipe-gallery-custom').once('AttachGalleryToPhotoswipeElement').each( function() {
+      // The once call is wrapped in $() to allow the usual jQuery chaining.
+      const $AttachGalleryToPhotoswipeElement =  $(once('AttachGalleryToPhotoswipeElement', '.photoswipe-gallery-custom'));
+      // `$elements` is always a jQuery object.
+      $AttachGalleryToPhotoswipeElement.each(function() {
         var $pic     = $(this),
           getItems = function() {
             var items = [];
@@ -56,7 +63,7 @@
           image[index].src = value['src'];
         });
 
-        $pic.once('ClickItemFromGallery').on('click', 'a.photoswipe-item', function(event) {
+        $(once('ClickItemFromGallery', $pic)).on('click', 'a.photoswipe-item', function(event) {
           event.preventDefault();
 
           // Get the index of our parent which is part of the grid.
@@ -84,4 +91,4 @@
     }
   };
 
-})(jQuery);
+})(Drupal, jQuery, once);

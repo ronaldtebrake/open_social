@@ -105,7 +105,7 @@ class FollowTaxonomyActivityContext extends ActivityContextBase {
   /**
    * {@inheritdoc}
    */
-  public function getRecipients(array $data, $last_uid, $limit) {
+  public function getRecipients(array $data, int $last_id, int $limit): array {
     // It could happen that a notification has been queued but the account has
     // since been deleted and message author is anonymous.
     if (!empty($data['actor']) && (int) $data['actor'] === 0) {
@@ -201,7 +201,7 @@ class FollowTaxonomyActivityContext extends ActivityContextBase {
   /**
    * {@inheritdoc}
    */
-  public function isValidEntity(EntityInterface $entity) {
+  public function isValidEntity(EntityInterface $entity): bool {
     if (!$entity instanceof ContentEntityInterface) {
       return FALSE;
     }
@@ -251,7 +251,7 @@ class FollowTaxonomyActivityContext extends ActivityContextBase {
   protected function haveAccessToNode(UserInterface $recipient, $nid) {
     $query = $this->connection->select('node_field_data', 'nfd');
     $query->leftJoin('node__field_content_visibility', 'nfcv', 'nfcv.entity_id = nfd.nid');
-    $query->leftJoin('group_content_field_data', 'gcfd', 'gcfd.entity_id = nfd.nid');
+    $query->leftJoin('group_relationship_field_data', 'gcfd', 'gcfd.entity_id = nfd.nid');
     $or = $query->orConditionGroup();
     $community_access = $or->andConditionGroup()
       ->condition('nfcv.field_content_visibility_value', ['community', 'public'], 'IN')

@@ -187,7 +187,7 @@ class QueryTopicTest extends SocialGraphQLTestBase {
             'timestamp' => $topic->getCreatedTime(),
           ],
           'heroImage' => [
-            'url' => file_create_url($topic_image->getFileUri()),
+            'url' => is_null($topic_image->getFileUri()) ? 'core/misc/druplicon.png' : \Drupal::service('file_url_generator')->generateAbsoluteString($topic_image->getFileUri()),
           ],
         ],
       ],

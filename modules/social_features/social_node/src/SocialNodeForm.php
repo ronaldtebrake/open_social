@@ -4,6 +4,7 @@ namespace Drupal\social_node;
 
 use Drupal\Component\Datetime\TimeInterface;
 use Drupal\Core\Datetime\DateFormatterInterface;
+use Drupal\Core\Entity\ContentEntityInterface;
 use Drupal\Core\Entity\EntityRepositoryInterface;
 use Drupal\Core\Entity\EntityTypeBundleInfoInterface;
 use Drupal\Core\Form\FormStateInterface;
@@ -39,8 +40,8 @@ class SocialNodeForm extends NodeForm {
   public function __construct(
     EntityRepositoryInterface $entity_repository,
     PrivateTempStoreFactory $temp_store_factory,
-    EntityTypeBundleInfoInterface $entity_type_bundle_info = NULL,
-    TimeInterface $time = NULL,
+    EntityTypeBundleInfoInterface $entity_type_bundle_info,
+    TimeInterface $time,
     AccountInterface $current_user,
     DateFormatterInterface $date_formatter,
     SocialNodeMessengerInterface $messenger
@@ -82,6 +83,29 @@ class SocialNodeForm extends NodeForm {
     $this->messenger()->setNode($node);
 
     parent::save($form, $form_state);
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function validateForm(array &$form, FormStateInterface $form_state): ContentEntityInterface {
+    parent::validateForm($form, $form_state);
+    /** @var \Drupal\Core\Entity\ContentEntityInterface $entity */
+    $entity = $this->buildEntity($form, $form_state);
+
+    // Get visibility options.
+    $visibilities = $form['field_content_visibility']['widget']['#options'];
+
+    // Check if the values are being altered while it's disabled.
+    foreach ($visibilities as $visibility => $value) {
+      if (isset($form['field_content_visibility']['widget'][$visibility]['#disabled'])
+        && $form['field_content_visibility']['widget'][$visibility]['#disabled'] === TRUE
+        && $form_state->getValue('field_content_visibility')[0]['value'] === $visibility) {
+        $form_state->setErrorByName('field_content_visibility', t('@visibility visibility is not allowed', ['@visibility' => $visibility]));
+      }
+    }
+
+    return $entity;
   }
 
   /**

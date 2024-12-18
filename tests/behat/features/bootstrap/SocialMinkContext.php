@@ -3,17 +3,9 @@
 
 namespace Drupal\social\Behat;
 
+use Behat\Mink\Exception\ElementNotFoundException;
 use Drupal\DrupalExtension\Context\MinkContext;
-use Behat\Behat\Context\Context;
-use Behat\Behat\Context\SnippetAcceptingContext;
-use Behat\Gherkin\Node\PyStringNode;
 use Behat\Gherkin\Node\TableNode;
-use Drupal\DrupalExtension\Context\DrupalContext;
-use Behat\MinkExtension\Context\RawMinkContext;
-use PHPUnit\Framework\Assert as PHPUnit;
-use Drupal\DrupalExtension\Hook\Scope\EntityScope;
-use Behat\Mink\Driver\Selenium2Driver;
-use Behat\Behat\Hook\Scope\AfterStepScope;
 
 /**
  * Defines application features from the specific context.
@@ -58,23 +50,16 @@ class SocialMinkContext extends MinkContext {
     parent::assertCheckBox($checkbox);
   }
 
-
-  /**
-   * @Given /^I make a screenshot$/
-   */
-  public function iMakeAScreenshot() {
-    $this->iMakeAScreenshotWithFileName('screenshot');
-  }
-
   /**
    * @Given /^I make a screenshot with the name "([^"]*)"$/
    */
   public function iMakeAScreenshotWithFileName($filename) {
-    $screenshot = $this->getSession()->getDriver()->getScreenshot();
-    $dir = '/var/www/travis_artifacts';
+    $dir = __DIR__ . '/../../logs';
     if (is_writeable($dir)) {
-      $file_and_path = $dir . '/' . $filename . '.jpg';
-      file_put_contents($file_and_path, $screenshot);
+      file_put_contents(
+        "$dir/$filename.jpg",
+        $this->getSession()->getScreenshot()
+      );
     }
   }
 
@@ -136,33 +121,6 @@ class SocialMinkContext extends MinkContext {
     $clearButton->click();
   }
 
-
-  /**
-   * @AfterStep
-   */
-  public function takeScreenShotAfterFailedStep(AfterStepScope $scope)
-  {
-    if (99 === $scope->getTestResult()->getResultCode()) {
-      $driver = $this->getSession()->getDriver();
-      if (!($driver instanceof Selenium2Driver)) {
-        return;
-      }
-      $feature = $scope->getFeature();
-      $title = $feature->getTitle();
-
-      $filename = date("Ymd-H_i_s");
-
-      if (!empty($title)) {
-        $filename .= '-' . str_replace(' ', '-', strtolower($title));
-      }
-
-      $filename .= '-error';
-
-      $this->iMakeAScreenshotWithFileName($filename);
-    }
-  }
-
-
   /**
    * Attaches file to field with specified name.
    *
@@ -180,6 +138,9 @@ class SocialMinkContext extends MinkContext {
 
   /**
    * @Then I should see checked the box :checkbox
+   *
+   * @todo This doesn't actually check that the radio button is visible for the
+   *   user, e.g. it may be hidden in a closed details element.
    */
   public function iShouldSeeCheckedTheBox($checkbox) {
     $checkbox = $this->fixStepArgument($checkbox);
@@ -232,4 +193,128 @@ class SocialMinkContext extends MinkContext {
     $this->getSession()->getPage()->fillField($field, $value);
   }
 
+  /**
+   * Ensure a specific option is selected in a select field.
+   *
+   * @Then I should see :option selected in the :locator select field
+   * @Then should see :option selected in the :locator select field
+   */
+  public function thenShouldSeeOptionSelected(string $option, string $locator) : void {
+    $field = $this->getSession()->getPage()->findField($locator);
+
+    if (NULL === $field) {
+      throw new ElementNotFoundException($this->getSession()->getDriver(), 'form field', 'id|name|label|value', $locator);
+    }
+
+    $opt = $field->find('named', ['option', $option]);
+
+    if (NULL === $opt) {
+      throw new ElementNotFoundException($this->getSession()->getDriver(), 'select option', 'value|text', $option);
+    }
+
+    if (!$opt->isSelected()) {
+      throw new \Exception("Expected '$option' to be selected but it was not.");
+    }
+  }
+
+  /**
+   * Ensure a select field does not contain an option.
+   *
+   * @Then I should not see :option in the :locator select field
+   * @Then should not see :option in the :locator select field
+   */
+  public function thenShouldNotSeeOptionInTheSelectField(string $option, string $locator) : void {
+    $field = $this->getSession()->getPage()->findField($locator);
+
+    if (NULL === $field) {
+      throw new ElementNotFoundException($this->getSession()->getDriver(), 'form field', 'id|name|label|value', $locator);
+    }
+
+    $opt = $field->find('named', ['option', $option]);
+
+    if ($opt !== NULL) {
+      throw new \Exception("The field was not supposed to contain '$option' but it was an option in the select field.");
+    }
+  }
+
+  /**
+   * Checks, that (?P<num>\d+) text exist in a selector on the page
+   * Example: Then I should see "text" 5 times in ".teaser__title"
+   * Example: And I should see "text" 1 time in "h4"
+   *
+   * @Then /^(?:|I )should see "(?P<text>(?:[^"]|\\")*)" (?P<num>\d+) time(s?) in "(?P<selector>(?:[^"]|\\")*)"$/
+   */
+  public function assertNumTextCss($num, $text, $selector) {
+    $session = $this->getSession();
+    $elements = $session->getPage()->findAll('css', $selector);
+    $regex = '/' . preg_quote($text, '/') . '/ui';
+
+    $count = 0;
+    foreach ($elements as $element) {
+      $element_text = $element->getText();
+      $actual = preg_replace('/\s+/u', ' ', $element_text);
+      preg_match($regex, $actual, $matches);
+
+      $count += count($matches);
+    }
+
+    if ($count !== (int) $num) {
+      throw new \Exception(sprintf('The text %s was not found %d time(s) in the text of the current page.', $text, $num));
+    }
+
+    return TRUE;
+  }
+
+  /**
+   * Ensure a select field does not contain the following options.
+   *
+   * @Given /^the "(?P<locator>[^"]+)" select field should not contain the following options:$/
+   */
+  public function theSelectFieldShouldNotContainTheFollowingOptions(string $locator, TableNode $options): void {
+    $field = $this->getSession()->getPage()->findField($locator);
+
+    if (NULL === $field) {
+      throw new ElementNotFoundException($this->getSession()->getDriver(), 'form field', 'id|name|label|value', $locator);
+    }
+
+    foreach ($options->getHash() as $value) {
+      $option = $field->find('named', ['option', $value['options']]);
+
+      if ($option !== NULL) {
+        throw new \Exception("The field was supposed to not contain '$option' but it was an option in the select field.");
+      }
+    }
+  }
+
+  /**
+   * Ensure a select field does contain the following options.
+   *
+   * @Given /^the "(?P<locator>[^"]+)" select field should contain the following options:$/
+   */
+  public function theSelectFieldShouldContainTheFollowingOptions(string $locator, TableNode $options): void {
+    $field = $this->getSession()->getPage()->findField($locator);
+
+    if (NULL === $field) {
+      throw new ElementNotFoundException($this->getSession()->getDriver(), 'form field', 'id|name|label|value', $locator);
+    }
+
+    foreach ($options->getHash() as $value) {
+      $option = $field->find('named', ['option', $value['options']]);
+
+      if ($option === NULL) {
+        throw new \Exception("The field was supposed to contain '$option' but it was not an option in the select field.");
+      }
+    }
+  }
+
+  /**
+   * @Then /^I should see "([^"]*)" exactly "([^"]*)" times$/
+   */
+  public function iShouldSeeTheTextCertainNumberTimes($text, $expectedNumber): void {
+    $allText = $this->getSession()->getPage()->getText();
+    $numberText = substr_count($allText, $text);
+    if ($expectedNumber != $numberText) {
+      throw new \Exception('Found '.$numberText.' times of "'.$text.'" when expecting '.$expectedNumber);
+    }
+  }
 }

@@ -9,14 +9,14 @@ use Drupal\Core\Controller\ControllerBase;
 use Drupal\Core\Database\Connection;
 use Drupal\Core\Entity\EntityFormBuilderInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
+use Drupal\Core\File\FileUrlGeneratorInterface;
 use Drupal\Core\Session\AccountInterface;
 use Drupal\Core\StringTranslation\TranslationInterface;
-use Drupal\Core\Url;
 use Drupal\group\Entity\GroupInterface;
 use Drupal\node\NodeInterface;
 use Drupal\social_post\Entity\PostInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
-use Drupal\group\Plugin\GroupContentEnablerManagerInterface;
+use Drupal\group\Plugin\Group\Relation\GroupRelationTypeManagerInterface;
 
 /**
  * Returns responses for Album routes.
@@ -35,9 +35,16 @@ class SocialAlbumController extends ControllerBase {
   /**
    * The Group Content Enabler manager.
    *
-   * @var \Drupal\group\Plugin\GroupContentEnablerManagerInterface
+   * @var \Drupal\group\Plugin\Group\Relation\GroupRelationTypeManagerInterface
    */
-  protected $gcContentEnabler;
+  protected $groupRelationTypeManager;
+
+  /**
+   * File URL Generator services.
+   *
+   * @var \Drupal\Core\File\FileUrlGeneratorInterface
+   */
+  protected FileUrlGeneratorInterface $fileUrlGenerator;
 
   /**
    * SocialAlbumController constructor.
@@ -54,8 +61,10 @@ class SocialAlbumController extends ControllerBase {
    *   The current user.
    * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
    *   The configuration factory service.
-   * @param \Drupal\group\Plugin\GroupContentEnablerManagerInterface $gc_enabler
+   * @param \Drupal\group\Plugin\Group\Relation\GroupRelationTypeManagerInterface $group_relation_type_manager
    *   The group content manager.
+   * @param \Drupal\Core\File\FileUrlGeneratorInterface $file_url_generator
+   *   The file url generator service.
    */
   public function __construct(
     TranslationInterface $translation,
@@ -64,7 +73,8 @@ class SocialAlbumController extends ControllerBase {
     EntityFormBuilderInterface $entity_form_builder,
     AccountInterface $current_user,
     ConfigFactoryInterface $config_factory,
-    GroupContentEnablerManagerInterface $gc_enabler
+    GroupRelationTypeManagerInterface $group_relation_type_manager,
+    FileUrlGeneratorInterface $file_url_generator
   ) {
     $this->setStringTranslation($translation);
     $this->database = $database;
@@ -72,7 +82,8 @@ class SocialAlbumController extends ControllerBase {
     $this->entityFormBuilder = $entity_form_builder;
     $this->currentUser = $current_user;
     $this->configFactory = $config_factory;
-    $this->gcContentEnabler = $gc_enabler;
+    $this->groupRelationTypeManager = $group_relation_type_manager;
+    $this->fileUrlGenerator = $file_url_generator;
   }
 
   /**
@@ -86,7 +97,8 @@ class SocialAlbumController extends ControllerBase {
       $container->get('entity.form_builder'),
       $container->get('current_user'),
       $container->get('config.factory'),
-      $container->get('plugin.manager.group_content_enabler')
+      $container->get('group_relation_type.manager'),
+      $container->get('file_url_generator')
     );
   }
 
@@ -143,8 +155,13 @@ class SocialAlbumController extends ControllerBase {
       /** @var \Drupal\file\FileInterface $file */
       $file = $storage->load($file_id);
 
+      // When the file isn't have an URi, go to the next.
+      if (is_null($file->getFileUri())) {
+        continue;
+      }
+
       $items[$found][] = [
-        'url' => Url::fromUri(file_create_url($file->getFileUri()))->setAbsolute()->toString(),
+        'url' => $this->fileUrlGenerator->generateAbsoluteString($file->getFileUri()),
         'pid' => $post_id,
       ];
     }
@@ -220,21 +237,24 @@ class SocialAlbumController extends ControllerBase {
     if ($this->checkAlbumAccess($node)) {
       $account = $this->currentUser();
 
-      if ($node->getOwnerId() === $account->id()) {
+      // Access allowed for the owner or for the user who can edit any posts.
+      // The 'edit any post entities' is used because there is no separate
+      // permission for managers to add to any albums.
+      if ($node->getOwnerId() === $account->id() || $account->hasPermission('edit any post entities')) {
         return AccessResult::allowed();
       }
       elseif (
         !$node->field_album_creators->isEmpty() &&
         $node->field_album_creators->value
       ) {
-        /** @var \Drupal\group\Entity\Storage\GroupContentStorageInterface $storage */
+        /** @var \Drupal\group\Entity\Storage\GroupRelationshipStorageInterface $storage */
         $storage = $this->entityTypeManager()->getStorage('group_content');
 
         if ($group_content = $storage->loadByEntity($node)) {
-          /** @var \Drupal\group\Entity\GroupInterface $group */
+          /** @var \Drupal\social_group\SocialGroupInterface $group */
           $group = reset($group_content)->getGroup();
 
-          return AccessResult::allowedIf($group->getMember($account) !== FALSE);
+          return AccessResult::allowedIf($group->hasMember($account));
         }
       }
     }
@@ -306,8 +326,12 @@ class SocialAlbumController extends ControllerBase {
    *   The access result.
    */
   public function checkUserAlbumsAccess() {
-    $status = $this->config('social_album.settings')->get('status');
-    return AccessResult::allowedIf(!empty($status));
+    $config = $this->config('social_album.settings');
+    // Allow access only if Album feature is enabled.
+    if ($config->get('status')) {
+      return AccessResult::allowed()->addCacheableDependency($config);
+    }
+    return AccessResult::forbidden()->addCacheableDependency($config);
   }
 
   /**
@@ -320,7 +344,7 @@ class SocialAlbumController extends ControllerBase {
    *   The access result.
    */
   protected function checkGroupAccess(GroupInterface $group) {
-    $is_allow = $group->getGroupType()->hasContentPlugin('group_node:album');
+    $is_allow = $group->getGroupType()->hasPlugin('group_node:album');
     return AccessResult::allowedIf($is_allow);
   }
 
@@ -351,13 +375,18 @@ class SocialAlbumController extends ControllerBase {
    * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
    */
   public function checkGroupAlbumAccess(GroupInterface $group): AccessResultInterface {
+    // Allow  access only when album feature is enabled.
+    if (!$this->config('social_album.settings')->get('status')) {
+      return AccessResult::forbidden();
+    }
+
     $access = $this->checkGroupAccess($group);
 
     if ($access->isAllowed()) {
-      /** @var \Drupal\group\Plugin\GroupContentAccessControlHandler $handler */
-      $handler = $this->gcContentEnabler->getAccessControlHandler('group_node:album');
+      /** @var \Drupal\group\Plugin\Group\RelationHandler\AccessControlInterface $handler */
+      $handler = $this->groupRelationTypeManager->getAccessControlHandler('group_node:album');
       // Reset the access, we are aware there is a plugin.
-      $access = $handler->relationCreateAccess($group, $this->currentUser(), TRUE);
+      $access = $handler->relationshipCreateAccess($group, $this->currentUser(), TRUE);
       if ($access instanceof AccessResultInterface) {
         return $access;
       }

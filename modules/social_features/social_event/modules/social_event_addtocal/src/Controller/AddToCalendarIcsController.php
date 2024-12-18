@@ -3,7 +3,10 @@
 namespace Drupal\social_event_addtocal\Controller;
 
 use Drupal\Core\Controller\ControllerBase;
+use Drupal\Core\File\FileExists;
 use Drupal\Core\File\FileSystemInterface;
+use Eluceo\iCal\Domain\Entity\TimeZone;
+use Eluceo\iCal\Presentation\Factory\TimeZoneFactory;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -59,6 +62,12 @@ class AddToCalendarIcsController extends ControllerBase {
   public function downloadIcs() {
     // Event dates.
     $dates = $this->request->get('dates');
+    $timezone = $this->request->get('timezone');
+
+    // Generate timestamp, which needs to be the time the ICS object created.
+    // https://icalendar.org/iCalendar-RFC-5545/3-6-1-event-component.html
+    $now = new \DateTime('now', new \DateTimezone('UTC'));
+    $dateTimeStamp = $now->format('Ymd\THis\Z');
 
     // Create ICS filename.
     $name = md5(serialize($this->request->query->all()));
@@ -69,15 +78,30 @@ class AddToCalendarIcsController extends ControllerBase {
 
     // Generate data for ICS file if it not exists.
     if (!file_exists($file)) {
-      // Set initial data.
+      // Set initial data for identifying the event.
       $file_data = [
         'BEGIN:VCALENDAR',
         'VERSION:2.0',
+        'PRODID:Event ' . $this->request->get('nid') . " - " . $this->request->get('title'),
         'METHOD:PUBLISH',
-        'BEGIN:VEVENT',
-        'UID:' . $name,
-        'SUMMARY:' . $this->request->get('title'),
       ];
+
+      // Generate the VTIMEZONE.
+      $timezone_components = [];
+      $timezone_components[$timezone] = $this->generateTimezoneComponent($dates['start'], $timezone);
+      $timezone_components[$timezone] = $this->generateTimezoneComponent($dates['end'], $timezone);
+
+      $componentFactory = new TimeZoneFactory();
+      $timezone_elements = $componentFactory->createComponents($timezone_components);
+      foreach ($timezone_elements as $el) {
+        $file_data[] = rtrim($el->__toString());
+      }
+
+      // Begin the event data.
+      $file_data[] = 'BEGIN:VEVENT';
+      $file_data[] = 'SUMMARY:' . $this->request->get('title');
+      $file_data[] = 'UID:' . $name;
+      $file_data[] = 'TRANSP:OPAQUE';
 
       // Set start and end datetime for event.
       if ($dates['all_day']) {
@@ -89,18 +113,20 @@ class AddToCalendarIcsController extends ControllerBase {
         $file_data[] = 'DTEND;TZID=' . $dates['end'];
       }
 
-      // Set location.
-      if ($this->request->get('description')) {
-        $file_data[] = 'DESCRIPTION:' . $this->request->get('description');
-      }
+      // Add the DTSTAMP.
+      $file_data[] = 'DTSTAMP:' . $dateTimeStamp;
 
-      // Set description.
+      // Set location.
       if ($this->request->get('location')) {
         $file_data[] = 'LOCATION:' . $this->request->get('location');
       }
 
+      // Set description.
+      if ($this->request->get('description')) {
+        $file_data[] = 'DESCRIPTION:' . $this->request->get('description');
+      }
+
       // Set end of file.
-      $file_data[] = 'TRANSP:OPAQUE';
       $file_data[] = 'END:VEVENT';
       $file_data[] = 'END:VCALENDAR';
 
@@ -108,7 +134,7 @@ class AddToCalendarIcsController extends ControllerBase {
       $data = implode("\r\n", $file_data);
 
       // Save datta to file.
-      $this->fileSystem->saveData($data, $file, FileSystemInterface::EXISTS_REPLACE);
+      $this->fileSystem->saveData($data, $file, FileExists::Replace);
     }
 
     // Set response for file download.
@@ -117,6 +143,28 @@ class AddToCalendarIcsController extends ControllerBase {
     $response->setContentDisposition('attachment', $filename);
 
     return $response;
+  }
+
+  /**
+   * Helper method to generate the VTIMEZONE component for a date.
+   *
+   * @param string $date
+   *   Date string.
+   * @param string $timezone
+   *   Timezone string.
+   *
+   * @return \Eluceo\iCal\Domain\Entity\TimeZone
+   *   Returns the TimeZone component.
+   */
+  protected function generateTimezoneComponent(string $date, string $timezone) {
+    $date = str_replace("$timezone:", "", $date);
+    $timezone_component = TimeZone::createFromPhpDateTimeZone(
+      new \DateTimeZone($timezone),
+      new \DateTimeImmutable($date, new \DateTimeZone($timezone)),
+      new \DateTimeImmutable($date, new \DateTimeZone($timezone)),
+    );
+
+    return $timezone_component;
   }
 
 }

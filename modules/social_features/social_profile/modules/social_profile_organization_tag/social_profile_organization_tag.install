@@ -5,6 +5,8 @@
  * Install and update functions for the social_profile_organization_tag module.
  */
 
+use Symfony\Component\Yaml\Yaml;
+
 /**
  * Implements hook_install().
  */
@@ -14,7 +16,8 @@ function social_profile_organization_tag_install() {
     'contentmanager',
     [
       'delete terms in profile_organization_tag',
-      'edit terms in profile_tag',
+      'edit terms in profile_organization_tag',
+      'create terms in profile_organization_tag',
       'edit profile organization tags',
     ]
   );
@@ -22,11 +25,178 @@ function social_profile_organization_tag_install() {
     'sitemanager',
     [
       'delete terms in profile_organization_tag',
-      'edit terms in profile_tag',
+      'edit terms in profile_organization_tag',
+      'create terms in profile_organization_tag',
       'edit profile organization tags',
     ]
   );
   // Set the weight of this module to 1 so it is loaded after
   // the social_profile module.
   module_set_weight('social_profile_organization_tag', 1);
+}
+
+/**
+ * Implements hook_update_last_removed().
+ */
+function social_profile_organization_tag_update_last_removed() : int {
+  return 11201;
+}
+
+/**
+ * Add new permissions for taxonomies.
+ */
+function social_profile_organization_tag_update_121001(): void {
+  // Nothing to do if the module is not installed.
+  if (!\Drupal::moduleHandler()->moduleExists("taxonomy_access_fix")) {
+    return;
+  }
+
+  // Permission to grant.
+  $taxonomy_permissions = [
+    'view terms in profile_organization_tag',
+    'view term names in profile_organization_tag',
+    'select terms in profile_organization_tag',
+  ];
+
+  // Authenticated roles.
+  $authenticated_roles = [
+    'sitemanager',
+    'verified',
+    'contentmanager',
+  ];
+
+  // Load the permission.
+  $entity_type_manager = \Drupal::entityTypeManager();
+  foreach ($authenticated_roles as $role) {
+    /** @var \Drupal\user\RoleInterface $role */
+    $role = $entity_type_manager->getStorage('user_role')->load($role);
+
+    // If the role is not have the permission, grant permission.
+    foreach ($taxonomy_permissions as $taxonomy_permission) {
+      if (!$role->hasPermission($taxonomy_permission)) {
+        $role->grantPermission($taxonomy_permission);
+        $role->save();
+      }
+    }
+  }
+
+  // For anonymous role, we need to check the if Registration Fields is enabled.
+  if (!\Drupal::moduleHandler()->moduleExists("social_registration_fields")) {
+    return;
+  }
+
+  // Load anonymous role.
+  /** @var \Drupal\user\RoleInterface $role */
+  $role = $entity_type_manager->getStorage('user_role')->load('anonymous');
+
+  // If the role is not have the permission, grant permission.
+  foreach ($taxonomy_permissions as $taxonomy_permission) {
+    if (!$role->hasPermission($taxonomy_permission)) {
+      $role->grantPermission($taxonomy_permission);
+      $role->save();
+    }
+  }
+}
+
+/**
+ * Revert the anonymous permission from 121001 to see organization tags.
+ */
+function social_profile_organization_tag_update_121002(): void {
+  // Nothing to do if the module is not installed.
+  if (!\Drupal::moduleHandler()->moduleExists("taxonomy_access_fix")) {
+    return;
+  }
+
+  // Permission to grant.
+  $taxonomy_permissions = [
+    'view terms in profile_organization_tag',
+    'view term names in profile_organization_tag',
+    'select terms in profile_organization_tag',
+  ];
+
+  // Authenticated roles.
+  $authenticated_roles = [
+    'verified',
+  ];
+
+  // Load the permission.
+  $entity_type_manager = \Drupal::entityTypeManager();
+  foreach ($authenticated_roles as $role) {
+    /** @var \Drupal\user\RoleInterface $role */
+    $role = $entity_type_manager->getStorage('user_role')->load($role);
+
+    // If the role is not have the permission, grant permission.
+    foreach ($taxonomy_permissions as $taxonomy_permission) {
+      if ($role->hasPermission($taxonomy_permission)) {
+        $role->revokePermission($taxonomy_permission);
+        $role->save();
+      }
+    }
+  }
+
+  // For anonymous role, we need to check the if Registration Fields is enabled.
+  if (!\Drupal::moduleHandler()->moduleExists("social_registration_fields")) {
+    return;
+  }
+
+  // Load anonymous role.
+  /** @var \Drupal\user\RoleInterface $role */
+  $role = $entity_type_manager->getStorage('user_role')->load('anonymous');
+
+  // If the role is not have the permission, grant permission.
+  foreach ($taxonomy_permissions as $taxonomy_permission) {
+    if ($role->hasPermission($taxonomy_permission)) {
+      $role->revokePermission($taxonomy_permission);
+      $role->save();
+    }
+  }
+}
+
+/**
+ * Grant permissions for SM to create terms in event_types vocabulary.
+ */
+function social_profile_organization_tag_update_130001(): void {
+  user_role_grant_permissions('contentmanager', ['create terms in profile_organization_tag']);
+  user_role_grant_permissions('sitemanager', ['create terms in profile_organization_tag']);
+}
+
+/**
+ * Create entity-form-display or hide path field from Organization Tag taxonomy.
+ */
+function social_profile_organization_tag_update_130002(): void {
+  $storage = \Drupal::entityTypeManager()->getStorage('entity_form_display');
+  $form_display = $storage->load('taxonomy_term.profile_organization_tag.default');
+
+  // When entity-form-display isn't be created,
+  // It will be created from the install folder.
+  if (empty($form_display)) {
+    // Get file from install folder and check if it exists.
+    $config_file = \Drupal::service('extension.list.module')->getPath('social_profile_organization_tag') . '/config/install/core.entity_form_display.taxonomy_term.profile_organization_tag.default.yml';
+    if (file_exists($config_file) === FALSE) {
+      \Drupal::logger('social_profile')->error('Configuration file for entity-form-display "profile_organization_tag" not found.');
+      return;
+    }
+
+    // Apply the configuration to create entity-form-display.
+    $view_config = Yaml::parseFile($config_file);
+    \Drupal::configFactory()->getEditable('core.entity_form_display.taxonomy_term.profile_organization_tag.default')
+      ->setData($view_config)
+      ->save();
+  }
+  else {
+    // Get fields and check if path is already be hidden.
+    $hidden = $form_display->get('hidden');
+    $content = $form_display->get('content');
+    if (in_array('path', array_keys($hidden))) {
+      \Drupal::logger('social_profile_organization_tag')->info('The path field already is hidden on Profile Organization Tag taxonomy.');
+      return;
+    }
+
+    // Manipulate path field to be hidden and save.
+    $hidden['path'] = TRUE;
+    unset($content['path']);
+    $form_display->set('hidden', $hidden)
+      ->set('content', $content)
+      ->save();
+  }
 }

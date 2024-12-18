@@ -3,7 +3,7 @@
 namespace Drupal\social_group;
 
 use Drupal\group\Entity\Group;
-use Drupal\group\Entity\GroupContent;
+use Drupal\group\Entity\GroupRelationship;
 use Drupal\node\NodeInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Extension\ModuleHandlerInterface;
@@ -62,6 +62,7 @@ class SetGroupsForNodeService {
     // moved.
     if ((empty($original_groups) || $original_groups != $groups_to_add)) {
       $entity_query = $this->entityTypeManager->getStorage('activity')->getQuery();
+      $entity_query->accessCheck();
       $entity_query->condition('field_activity_entity.target_id', $node->id(), '=');
       $entity_query->condition('field_activity_entity.target_type', 'node', '=');
 
@@ -129,7 +130,7 @@ class SetGroupsForNodeService {
     if (!empty($groups_to_remove)) {
       $groups = Group::loadMultiple($groups_to_remove);
       foreach ($groups as $group) {
-        self::removeGroupContent($node, $group);
+        self::removeGroupRelationship($node, $group);
       }
     }
 
@@ -137,56 +138,49 @@ class SetGroupsForNodeService {
     if (!empty($groups_to_add)) {
       $groups = Group::loadMultiple($groups_to_add);
       foreach ($groups as $group) {
-        self::addGroupContent($node, $group);
+        self::addGroupRelationship($node, $group);
       }
     }
 
     // Invoke hook_social_group_move if the content is not new.
     if ($moved && !$is_new) {
-      $hook = 'social_group_move';
-
-      foreach ($this->moduleHandler->getImplementations($hook) as $module) {
-        $function = $module . '_' . $hook;
-        $function($node);
-      }
+      $this->moduleHandler->invokeAll("social_group_move", [$node]);
     }
 
     return $node;
   }
 
   /**
-   * Creates a group content.
+   * Creates a group relationship.
    *
    * @param \Drupal\node\NodeInterface $node
    *   Object of a node.
    * @param \Drupal\group\Entity\Group $group
    *   Object of a group.
    */
-  public static function addGroupContent(NodeInterface $node, Group $group) {
+  public static function addGroupRelationship(NodeInterface $node, Group $group): void {
     // @todo Check if group plugin id exists.
     $plugin_id = 'group_node:' . $node->bundle();
-    $group_contents = GroupContent::loadByEntity($node);
+    $group_contents = GroupRelationship::loadByEntity($node);
     if (empty($group_contents)) {
-      $group->addContent($node, $plugin_id, ['uid' => $node->getOwnerId()]);
+      $group->addRelationship($node, $plugin_id, ['uid' => $node->getOwnerId()]);
     }
   }
 
   /**
-   * Deletes a group content.
+   * Deletes a group relationship.
    *
    * @param \Drupal\node\NodeInterface $node
    *   Object of a node.
    * @param \Drupal\group\Entity\Group $group
    *   Object of a group.
    */
-  public static function removeGroupContent(NodeInterface $node, Group $group) {
+  public static function removeGroupRelationship(NodeInterface $node, Group $group): void {
     // Try to load group content from entity.
-    if (($group_contents = GroupContent::loadByEntity($node)) && !empty($group_contents)) {
-      /** @var @param \Drupal\group\Entity\GroupContent $group_content */
-      foreach ($group_contents as $group_content) {
-        if ($group->id() === $group_content->getGroup()->id()) {
-          $group_content->delete();
-        }
+    $group_contents = GroupRelationship::loadByEntity($node);
+    foreach ($group_contents as $group_content) {
+      if ($group->id() === $group_content->getGroup()->id()) {
+        $group_content->delete();
       }
     }
   }

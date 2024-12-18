@@ -5,6 +5,7 @@ namespace Drupal\social_group_invite\Form;
 use Drupal\Core\Access\AccessResult;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
+use Drupal\Core\File\FileUrlGenerator;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\Core\Logger\LoggerChannelFactoryInterface;
 use Drupal\Core\Messenger\MessengerInterface;
@@ -17,7 +18,7 @@ use Drupal\file\Entity\File;
 use Drupal\ginvite\GroupInvitationLoader;
 use Drupal\group\Entity\GroupInterface;
 use Drupal\group\GroupMembershipLoaderInterface;
-use Drupal\group\Plugin\GroupContentEnablerManagerInterface;
+use Drupal\group\Plugin\Group\Relation\GroupRelationTypeManagerInterface;
 use Drupal\user\Entity\User;
 use Drupal\user\UserInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
@@ -102,11 +103,18 @@ class SocialBulkGroupInvitation extends BulkGroupInvitation {
   protected $token;
 
   /**
-   * The group content plugin manager.
+   * The group relation type manager.
    *
-   * @var \Drupal\group\Plugin\GroupContentEnablerManagerInterface
+   * @var \Drupal\group\Plugin\Group\Relation\GroupRelationTypeManagerInterface
    */
-  protected $pluginManager;
+  protected $groupRelationTypeManager;
+
+  /**
+   * The file url generator.
+   *
+   * @var \Drupal\Core\File\FileUrlGenerator
+   */
+  protected FileUrlGenerator $fileUrlGenerator;
 
   /**
    * Constructs a new BulkGroupInvitation Form.
@@ -125,12 +133,14 @@ class SocialBulkGroupInvitation extends BulkGroupInvitation {
    *   The group membership loader.
    * @param \Drupal\ginvite\GroupInvitationLoader $invitation_loader
    *   Invitations loader service.
-   * @param \Drupal\group\Plugin\GroupContentEnablerManagerInterface $plugin_manager
-   *   The group content enabler manager.
+   * @param \Drupal\group\Plugin\Group\Relation\GroupRelationTypeManagerInterface $group_relation_type_manager
+   *   The group relation type manager.
    * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
    *   The config factory.
    * @param \Drupal\Core\Utility\Token $token
    *   The token service.
+   * @param \Drupal\Core\File\FileUrlGenerator $file_url_generator
+   *   The file url generator service.
    */
   public function __construct(
     RouteMatchInterface $route_match,
@@ -140,17 +150,19 @@ class SocialBulkGroupInvitation extends BulkGroupInvitation {
     MessengerInterface $messenger,
     GroupMembershipLoaderInterface $group_membership_loader,
     GroupInvitationLoader $invitation_loader,
-    GroupContentEnablerManagerInterface $plugin_manager,
+    GroupRelationTypeManagerInterface $group_relation_type_manager,
     ConfigFactoryInterface $config_factory,
-    Token $token
+    Token $token,
+    FileUrlGenerator $file_url_generator
   ) {
     parent::__construct($route_match, $entity_type_manager, $temp_store_factory, $logger_factory, $messenger, $group_membership_loader, $invitation_loader);
     $this->group = $this->routeMatch->getParameter('group');
-    $this->pluginManager = $plugin_manager;
+    $this->groupRelationTypeManager = $group_relation_type_manager;
     $this->configFactory = $config_factory;
     $this->token = $token;
-    $this->groupInvitationLoader = $group_membership_loader;
-    $this->groupMembershipLoader = $invitation_loader;
+    $this->groupMembershipLoader = $group_membership_loader;
+    $this->groupInvitationLoader = $invitation_loader;
+    $this->fileUrlGenerator = $file_url_generator;
   }
 
   /**
@@ -165,9 +177,10 @@ class SocialBulkGroupInvitation extends BulkGroupInvitation {
       $container->get('messenger'),
       $container->get('group.membership_loader'),
       $container->get('ginvite.invitation_loader'),
-      $container->get('plugin.manager.group_content_enabler'),
+      $container->get('group_relation_type.manager'),
       $container->get('config.factory'),
-      $container->get('token')
+      $container->get('token'),
+      $container->get('file_url_generator')
     );
   }
 
@@ -208,9 +221,9 @@ class SocialBulkGroupInvitation extends BulkGroupInvitation {
     ];
 
     $form['users_fieldset']['user'] = [
-      '#title' => $this->t('Find people by name or email address'),
+      '#title' => $this->t('Invite any person inside or outside your community using their name or email'),
       '#type' => 'select2',
-      '#description' => $this->t('You can enter or paste multiple entries separated by comma or semicolon'),
+      '#description' => $this->t('For multiple invitees separate each name or email with a comma'),
       '#multiple' => TRUE,
       '#tags' => TRUE,
       '#autocomplete' => TRUE,
@@ -227,15 +240,15 @@ class SocialBulkGroupInvitation extends BulkGroupInvitation {
     ];
 
     // Load plugin configuration.
-    $group_plugin_collection = $this->pluginManager->getInstalled($group->getGroupType());
+    $group_plugin_collection = $this->groupRelationTypeManager->getInstalled($group->getGroupType());
     $group_invite_config = $group_plugin_collection->getConfiguration()['group_invitation'];
 
     // Get invite settings.
     $invite_settings = $this->configFactory->get('social_group.settings')->get('group_invite');
 
     // Set preview subject and message.
-    $invitation_subject = $invite_settings['invite_subject'] ?? $group_invite_config['invitation_subject'];
-    $invitation_body = $invite_settings['invite_message'] ?? $group_invite_config['invitation_body'];
+    $invitation_subject = $group_invite_config['invitation_subject'] ?? $invite_settings['invite_subject'];
+    $invitation_body = $group_invite_config['invitation_body'] ?? $invite_settings['invite_message'];
 
     // Cleanup message body and replace any links on preview page.
     $invitation_body = $this->token->replace($invitation_body, $params);
@@ -249,8 +262,8 @@ class SocialBulkGroupInvitation extends BulkGroupInvitation {
     if (is_array($email_logo) && !empty($email_logo)) {
       $file = File::load(reset($email_logo));
 
-      if ($file instanceof File) {
-        $logo = file_create_url($file->getFileUri());
+      if ($file instanceof File && !is_null($file->getFileUri())) {
+        $logo = $this->fileUrlGenerator->generateAbsoluteString($file->getFileUri());
       }
     }
 
@@ -326,13 +339,19 @@ class SocialBulkGroupInvitation extends BulkGroupInvitation {
           }
         }
         else {
-          /** @var \Drupal\group\Entity\Storage\GroupContentStorageInterface $group_content_storage */
+          /** @var \Drupal\group\Entity\Storage\GroupRelationshipStorageInterface $group_content_storage */
           $group_content_storage = $this->entityTypeManager->getStorage('group_content');
           // If the invitation has already been send, unset it from the list
           // and show an error.
           // For some reason groupInvitationLoader service doesn't work
           // properly.
-          if (!empty($group_content_storage->loadByGroup($this->group, 'group_invitation', ['invitee_mail' => $email]))) {
+          $group_invitation = $group_content_storage->loadByProperties([
+            'gid' => $this->group->id(),
+            'plugin_id' => 'group_invitation',
+            'invitee_mail' => $email,
+          ]);
+
+          if (!empty($group_invitation)) {
             $form_state->unsetValue(['users_fieldset', 'user', $user]);
 
             $message_singular = "User with @error_message e-mail has already been invited.";
@@ -450,15 +469,18 @@ class SocialBulkGroupInvitation extends BulkGroupInvitation {
       'finished' => 'Drupal\social_group_invite\Form\SocialBulkGroupInvitation::batchFinished',
     ];
 
+    /** @var \Drupal\group\Entity\Storage\GroupRelationshipTypeStorageInterface $storage */
+    $storage = $this->entityTypeManager->getStorage('group_content_type');
+    $group_type_id = (string) $this->group->getGroupType()->id();
+    $relation_type_id = $storage->getRelationshipTypeId($group_type_id, 'group_invitation');
+
     foreach ($form_state->getValue('users_fieldset')['user'] as $email) {
       $email = $this->extractEmailsFrom($email);
 
       // Make sure to only add valid emails to the batch.
       if ($email) {
         $values = [
-          'type' => $this->group->getGroupType()
-            ->getContentPlugin('group_invitation')
-            ->getContentTypeConfigId(),
+          'type' => $relation_type_id,
           'gid' => $this->group->id(),
           'invitee_mail' => $email,
           'entity_id' => 0,
@@ -470,7 +492,7 @@ class SocialBulkGroupInvitation extends BulkGroupInvitation {
     // Prepare params to store them in tempstore.
     $params = [];
     $params['gid'] = $this->group->id();
-    $params['plugin'] = $this->group->getGroupType()->getContentPlugin('group_invitation')->getContentTypeConfigId();
+    $params['plugin'] = $relation_type_id;
     $params['emails'] = $this->getSubmittedEmails($form_state);
 
     $tempstore = $this->tempStoreFactory->get('ginvite_bulk_invitation');
@@ -489,7 +511,7 @@ class SocialBulkGroupInvitation extends BulkGroupInvitation {
    *   List of emails to invite .
    */
   private function getSubmittedEmails(FormStateInterface $form_state) {
-    return array_map('trim', array_unique(explode("\r\n", trim($form_state->getValue('email_address')))));
+    return array_map('trim', array_unique(explode("\r\n", trim($form_state->getValue('email_address') ?? ""))));
   }
 
   /**
@@ -541,7 +563,7 @@ class SocialBulkGroupInvitation extends BulkGroupInvitation {
   /**
    * Returns access to the invite page.
    *
-   * @param \Drupal\group\Entity\GroupInterface|mixed[] $group
+   * @param \Drupal\group\Entity\GroupInterface $group
    *   The group entity.
    *
    * @return \Drupal\Core\Access\AccessResultInterface

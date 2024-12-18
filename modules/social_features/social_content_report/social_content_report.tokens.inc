@@ -56,12 +56,15 @@ function social_content_report_tokens($type, $tokens, array $data, array $option
           /** @var \Drupal\flag\FlaggingInterface $flagging */
           $flagging = $storage->load($flagging_id);
 
-          // Load the flagged entity.
-          /** @var \Drupal\Core\Entity\EntityInterface $entity */
-          $entity = $flagging->getFlaggable();
+          // Check if the flagging entity exists in database.
+          if ($flagging !== NULL) {
+            // Load the flagged entity.
+            /** @var \Drupal\Core\Entity\EntityInterface $entity */
+            $entity = $flagging->getFlaggable();
 
-          // Set the URL for the entity.
-          $replacements[$original] = $entity->toUrl()->setAbsolute()->toString();
+            // Set the URL for the entity.
+            $replacements[$original] = $entity->toUrl()->setAbsolute()->toString();
+          }
         }
       }
     }
@@ -75,6 +78,11 @@ function social_content_report_tokens($type, $tokens, array $data, array $option
  */
 function social_content_report_tokens_alter(array &$replacements, array $context, BubbleableMetadata $bubbleable_metadata) {
   if ($context['type'] == 'message' && !empty($context['data']['message'])) {
+    // Translate hook_tokens options to the options for TranslatableMarkup.
+    $translation_options = [
+      'langcode' => $context['options']['langcode'] ?? NULL,
+    ];
+
     /** @var Drupal\message\Entity\Message $message */
     $message = $context['data']['message'];
 
@@ -89,37 +97,35 @@ function social_content_report_tokens_alter(array &$replacements, array $context
 
         if ($target_type === 'flagging') {
           $message_template_id = $message->getTemplate()->id();
-          switch ($message_template_id) {
-            case 'content_reported':
-              // Load the flag.
-              $flagging_id = $message->getFieldValue('field_message_related_object', 'target_id');
-              $storage = \Drupal::entityTypeManager()->getStorage('flagging');
+          if ($message_template_id === 'content_reported') {
+            // Load the flag.
+            $flagging_id = $message->getFieldValue('field_message_related_object', 'target_id');
+            $storage = \Drupal::entityTypeManager()->getStorage('flagging');
 
-              // Replace the preview token.
-              if (isset($context['tokens']['cta_button'])) {
-                $link = Url::fromRoute('view.report_overview.overview');
-                $cta_button = $email_token_services->getCtaButton($link, new TranslatableMarkup('Check the reported contents'));
-                $replacements[$context['tokens']['cta_button']] = \Drupal::service('renderer')->renderPlain($cta_button);
-              }
+            // Replace the preview token.
+            if (isset($context['tokens']['cta_button'])) {
+              $link = Url::fromRoute('view.report_overview.overview');
+              $cta_button = $email_token_services->getCtaButton($link, new TranslatableMarkup('Check the reported contents', [], $translation_options));
+              $replacements[$context['tokens']['cta_button']] = \Drupal::service('renderer')->renderInIsolation($cta_button);
+            }
 
-              // Replace the preview token.
-              if (isset($context['tokens']['preview'])) {
+            // Replace the preview token.
+            if (isset($context['tokens']['preview'])) {
+              $flagging = $storage->load($flagging_id);
+              $preview_info = [];
+              // Check if the flagging entity exists in database.
+              if ($flagging !== NULL) {
                 /** @var \Drupal\flag\FlaggingInterface $flagging */
-                $flagging = $storage->load($flagging_id);
-
                 // Load the flagged entity.
                 $entity = $flagging->getFlaggable();
                 $entity_type = $entity->getEntityTypeId();
-
-                $summary = '';
-                $preview_info = [];
 
                 switch ($entity_type) {
                   case 'post':
                     if ($entity instanceof PostInterface) {
                       /** @var \Drupal\social_post\Entity\Post $entity */
                       $preview_info = $email_token_services->getPostPreview($entity);
-                      $replacements[$context['tokens']['preview']] = \Drupal::service('renderer')->renderPlain($preview_info);
+                      $replacements[$context['tokens']['preview']] = \Drupal::service('renderer')->renderInIsolation($preview_info);
                     }
                     break;
 
@@ -127,20 +133,22 @@ function social_content_report_tokens_alter(array &$replacements, array $context
                     if ($entity instanceof NodeInterface) {
                       /** @var \Drupal\node\Entity\Node $entity */
                       $preview_info = $email_token_services->getContentPreview($entity);
-                      $replacements[$context['tokens']['preview']] = \Drupal::service('renderer')->renderPlain($preview_info);
+                      $replacements[$context['tokens']['preview']] = \Drupal::service('renderer')->renderInIsolation($preview_info);
                     }
                     break;
 
                   case 'comment':
                     /** @var \Drupal\comment\Entity\Comment $entity */
                     $preview_info = $email_token_services->getCommentPreview($entity);
-                    $replacements[$context['tokens']['preview']] = \Drupal::service('renderer')->renderPlain($preview_info);
+                    $replacements[$context['tokens']['preview']] = \Drupal::service('renderer')->renderInIsolation($preview_info);
                     break;
                 }
-                $replacements[$context['tokens']['preview']] = \Drupal::service('renderer')
-                  ->renderPlain($preview_info);
               }
-              break;
+              else {
+                $replacements[$context['tokens']['preview']] = \Drupal::service('renderer')
+                  ->renderInIsolation($preview_info);
+              }
+            }
           }
         }
       }

@@ -1,7 +1,7 @@
 # Contains translation patterns for the POTX tool that is used by Drupal and
 # Open Social to extract translatable strings. This is required to ensure that
 # strings in custom YAML file formats are translatable.
-translation_patters:
+translation_patterns:
   - matches: '*.installer_options.yml'
     translatable_keys:
       - name
@@ -9,4 +9,10 @@ translation_patters:
   - matches: '*.installer_options_list.yml'
     translatable_keys:
       - name
+      - description
+  # Can be removed as part of a new potx version, see #3411529 which was not
+  # tagged and released yet in potx:1.0
+  - matches: '*.field_type_categories.yml'
+    translatable_keys:
+      - label
       - description

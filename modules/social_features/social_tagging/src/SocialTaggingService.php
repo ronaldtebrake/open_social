@@ -2,205 +2,333 @@
 
 namespace Drupal\social_tagging;
 
+use Drupal\Component\Utility\NestedArray;
 use Drupal\Core\Config\ConfigFactoryInterface;
+use Drupal\Core\Entity\EntityInterface;
+use Drupal\Core\Entity\EntityTypeInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
+use Drupal\Core\Extension\ModuleHandlerInterface;
+use Drupal\Core\Form\FormStateInterface;
 use Drupal\Core\Language\LanguageManagerInterface;
+use Drupal\Core\StringTranslation\StringTranslationTrait;
+use Drupal\Core\StringTranslation\TranslatableMarkup;
 use Drupal\Core\Url;
+use Drupal\group\Entity\Group;
+use Drupal\social_core\Service\MachineNameInterface;
 use Drupal\taxonomy\TermInterface;
 
 /**
  * Provides a custom tagging service.
  */
-class SocialTaggingService {
+class SocialTaggingService implements SocialTaggingServiceInterface {
+
+  use StringTranslationTrait;
 
   /**
-   * The taxonomy storage.
-   *
-   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
+   * The name of the hook provides supported entity types.
    */
-  protected $entityTypeManager;
+  private const HOOK = 'social_tagging_type';
+
+  /**
+   * The entity type manager.
+   */
+  protected EntityTypeManagerInterface $entityTypeManager;
 
   /**
    * The configuration factory.
-   *
-   * @var \Drupal\Core\Config\ConfigFactoryInterface
    */
-  protected $configFactory;
+  protected ConfigFactoryInterface $configFactory;
 
   /**
    * The language manager.
-   *
-   * @var \Drupal\Core\Language\LanguageManagerInterface
    */
-  protected $languageManager;
+  protected LanguageManagerInterface $languageManager;
 
   /**
-   * SocialTaggingService constructor.
-   *
-   * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
-   *   Injection of the entityTypeManager.
-   * @param \Drupal\Core\Config\ConfigFactoryInterface $configFactory
-   *   Injection of the configFactory.
-   * @param \Drupal\Core\Language\LanguageManagerInterface $language_manager
-   *   Injection of the languageManager.
+   * The module handler.
+   */
+  private ModuleHandlerInterface $moduleHandler;
+
+  /**
+   * The machine name.
+   */
+  private MachineNameInterface $machineName;
+
+  /**
+   * {@inheritdoc}
    */
   public function __construct(
     EntityTypeManagerInterface $entityTypeManager,
     ConfigFactoryInterface $configFactory,
-    LanguageManagerInterface $language_manager
+    LanguageManagerInterface $language_manager,
+    ModuleHandlerInterface $module_handler,
+    MachineNameInterface $machine_name
   ) {
     $this->entityTypeManager = $entityTypeManager;
     $this->configFactory = $configFactory;
     $this->languageManager = $language_manager;
+    $this->moduleHandler = $module_handler;
+    $this->machineName = $machine_name;
   }
 
   /**
-   * Returns whether the feature is turned on or not.
-   *
-   * @return bool
-   *   Whether tagging is turned on or not.
+   * {@inheritdoc}
    */
-  public function active() {
-    return (bool) $this->configFactory->get('social_tagging.settings')->get('enable_content_tagging');
+  public function active(): bool {
+    return (bool) $this->configFactory->get('social_tagging.settings')
+      ->get('enable_content_tagging');
   }
 
   /**
-   * Returns whether the feature is turned on for groups or not.
-   *
-   * @return bool
-   *   Whether tagging is turned on or not for groups.
+   * {@inheritdoc}
    */
-  public function groupActive() {
-    return (bool) $this->configFactory->get('social_tagging.settings')->get('tag_type_group');
+  public function field(
+    array &$form,
+    FormStateInterface $form_state,
+    string $name,
+    TranslatableMarkup $title = NULL,
+    TranslatableMarkup $description = NULL,
+    string $wrapper = self::WRAPPER,
+    array $default_value = NULL,
+    string $parent = NULL
+  ): bool {
+    if ($parent !== NULL) {
+      $element = &NestedArray::getValue($form, [$parent]);
+    }
+    else {
+      $element = &$form;
+    }
+
+    $displayed = FALSE;
+
+    // Get the main categories.
+    $categories = $this->getCategories();
+
+    // Placement keys.
+    $keys = array_keys($this->getKeyValueOptions());
+    $filter_key = NULL;
+    foreach ($keys as $key) {
+      // Check if form ID is one of keys to filter.
+      if (str_contains((string) $form['#id'], $key) || str_contains((string) $form['#id'], str_replace('_', '-', $key))) {
+        $filter_key = $key;
+      }
+    }
+    if ($filter_key) {
+      foreach ($categories as $tid => $category) {
+        if ($this->termIsVisibleForEntities($tid, [$filter_key])) {
+          continue;
+        }
+        // Unset category as it is disables for current form.
+        unset($categories[$tid]);
+      }
+    }
+
+    // Build form field.
+    if ($default_value !== NULL) {
+      // Loop over the categories.
+      foreach ($categories as $tid => $category) {
+        $field_name = $name . '_' . $this->machineName->transform($category);
+
+        // Get the corresponding items.
+        $options = $this->getChildren($tid);
+
+        // Display parent item in the tags list.
+        if ($this->useCategoryParent()) {
+          $options = [$tid => $category] + $options;
+        }
+
+        // Only add a field if the category has any options.
+        if (count($options) > 0) {
+          // Add a field.
+          $element[$wrapper][$field_name] = [
+            '#type' => 'select2',
+            '#title' => $category,
+            '#multiple' => TRUE,
+            '#default_value' => $default_value,
+            '#group' => 'group_' . $wrapper,
+            '#options' => $options,
+          ];
+
+          $displayed = TRUE;
+        }
+      }
+
+      // Deny access the tags field altogether.
+      $element[$name]['#access'] = FALSE;
+
+      if ($displayed) {
+        // Add a custom submit handler.
+        $form['#validate'][] = '_social_tagging_entity_validate';
+
+        $fields = (array) $form_state->get('tags');
+        $form_state->set('tags', array_merge($fields, [$name]));
+      }
+    }
+    else {
+      $options = [];
+
+      foreach ($categories as $tid => $category) {
+        $options[$category] = $this->getChildren($tid);
+      }
+
+      $element[$name]['widget']['#options'] = $options;
+
+      // Move the tags field in the group.
+      $element[$wrapper][$name] = $element[$name];
+
+      unset($element[$name]);
+
+      $element[$wrapper][$name]['#group'] = 'group_' . $wrapper;
+
+      $displayed = TRUE;
+    }
+
+    if ($displayed) {
+      $styled = theme_get_setting('content_entity_form_style') === 'open_social';
+
+      $element[$wrapper] += [
+        '#type' => $styled ? 'details' : 'fieldset',
+        '#title' => $title,
+        '#description' => $description,
+        '#group' => 'group_' . $wrapper,
+        '#open' => TRUE,
+        '#weight' => $wrapper === self::WRAPPER ? 0 : 50,
+      ];
+    }
+
+    return $displayed;
   }
 
   /**
-   * Returns whether the feature is turned on for profiles or not.
-   *
-   * @return bool
-   *   Whether tagging is turned on or not for profiles.
+   * {@inheritdoc}
    */
-  public function profileActive() {
+  public function groupTypeActive(Group $group = NULL): bool {
+    if ($group) {
+      return (bool) $this->configFactory->get('social_tagging.settings')
+        ->get('tag_group_type_' . $group->bundle());
+    }
+
+    return FALSE;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function groupsActive(): bool {
+    $configs = $this->configFactory->get('social_tagging.settings')->getRawData();
+
+    foreach ($configs as $cid => $data) {
+      if (str_contains($cid, 'tag_group_type_')) {
+        return TRUE;
+      }
+    }
+
+    return FALSE;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function profileActive(): bool {
     return (bool) $this->configFactory->get('social_tagging.settings')->get('tag_type_profile');
   }
 
   /**
-   * Returns if there are any taxonomy items available.
-   *
-   * @return bool
-   *   If there are tags available.
+   * {@inheritdoc}
    */
-  public function hasContent() {
+  public function hasContent(): bool {
+    return count($this->getCategories()) > 0 && count($this->getAllChildren()) > 0;
+  }
 
-    if (count($this->getCategories()) == 0) {
+  /**
+   * {@inheritdoc}
+   */
+  public function allowSplit(): bool {
+    return $this->active() &&
+      $this->configFactory->get('social_tagging.settings')
+        ->get('allow_category_split');
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function queryCondition(): string {
+    return $this->configFactory->get('social_tagging.settings')
+      ->get('use_and_condition') ? 'AND' : 'OR';
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function useCategoryParent(): bool {
+    return $this->active() &&
+      $this->configFactory->get('social_tagging.settings')
+        ->get('use_category_parent');
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function getCategories(): array {
+    return $this->getChildren(0);
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function termIsVisibleForEntities(int $tid, array $placement_filter_keys): bool {
+    $term = $this->entityTypeManager->getStorage('taxonomy_term')->load($tid);
+    if (!$term instanceof TermInterface) {
       return FALSE;
     }
-
-    if (count($this->getAllChildren()) == 0) {
+    // Make sure that field_category_usage still exist.
+    if (!$term->hasField('field_category_usage')) {
       return FALSE;
     }
-
-    return TRUE;
-  }
-
-  /**
-   * Returns whether splitting of fields is allowed.
-   *
-   * @return bool
-   *   Whether category split on field level is turned on or not.
-   */
-  public function allowSplit() {
-    return (bool) ($this->active() && $this->configFactory->get('social_tagging.settings')->get('allow_category_split'));
-  }
-
-  /**
-   * Returns the filter query condition.
-   *
-   * @return string
-   *   Returns OR or AND.
-   */
-  public function queryCondition() {
-    return (string) ($this->configFactory->get('social_tagging.settings')->get('use_and_condition') ? 'AND' : 'OR');
-  }
-
-  /**
-   * Returns whether using a parent of categories is allowed.
-   *
-   * @return bool
-   *   Whether using categories parent is turned on or not..
-   */
-  public function useCategoryParent() {
-    return (bool) ($this->active() && $this->configFactory->get('social_tagging.settings')->get('use_category_parent'));
-  }
-
-  /**
-   * Returns all the top level term items, that are considered categories.
-   *
-   * @return array
-   *   An array of top level category items.
-   */
-  public function getCategories() {
-    // Define as array.
-    $options = [];
-
-    // Get the site's current language.
-    $current_lang = $this->languageManager->getCurrentLanguage()->getId();
-
-    // Fetch main categories.
-    // If the website is multilingual, we want to first check for the terms
-    // in current language. At the moment, users do not add proper language to
-    // vocabulary terms which may result in return of empty array on loadTree()
-    // function. So, we want to check for the terms also in default language if
-    // we don't find terms in current language.
-    if (!empty($current_lang_terms = $this->entityTypeManager->getStorage('taxonomy_term')->loadTree('social_tagging', 0, 1, FALSE, $current_lang))) {
-      $options = $this->prepareTermOptions($current_lang_terms);
+    $usage = unserialize($term->get('field_category_usage')->value ?? '');
+    // Check if category enabled for given entities.
+    if (is_array($usage) && !empty(array_intersect($placement_filter_keys, $usage))) {
+      return TRUE;
     }
-    // Add a fallback to default language of the website if the current
-    // language has no terms.
-    elseif (!empty($default_lang_terms = $this->entityTypeManager->getStorage('taxonomy_term')->loadTree('social_tagging', 0, 1, FALSE))) {
-      $options = $this->prepareTermOptions($default_lang_terms);
+    return FALSE;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function getChildren(int $category): array {
+    /** @var \Drupal\taxonomy\TermStorageInterface $storage */
+    $storage = $this->entityTypeManager->getStorage('taxonomy_term');
+
+    $languages = [
+      // If the website is multilingual, we want to first check for the terms
+      // in current language. At the moment, users do not add proper language to
+      // vocabulary terms which may result in return of empty array on loadTree
+      // function. So, we want to check for the terms also in default language
+      // if we don't find terms in current language.
+      $this->languageManager->getCurrentLanguage()->getId(),
+
+      // Add a fallback to default language of the website if the current
+      // language has no terms.
+      NULL,
+    ];
+
+    foreach ($languages as $language) {
+      $terms = $storage
+        ->loadTree('social_tagging', $category, 1, FALSE, $language);
+
+      if (!empty($terms)) {
+        return $this->prepareTermOptions($terms);
+      }
     }
 
-    // Return array.
-    return $options;
+    return [];
   }
 
   /**
-   * Returns the children of top level term items.
-   *
-   * @param int $category
-   *   The category you want to fetch the child items from.
-   *
-   * @return array
-   *   An array of child items.
+   * {@inheritdoc}
    */
-  public function getChildren($category) {
-    // Define as array.
-    $options = [];
-
-    // Get the site's current language.
-    $current_lang = $this->languageManager->getCurrentLanguage()->getId();
-
-    if (!empty($current_lang_terms = $this->entityTypeManager->getStorage('taxonomy_term')->loadTree('social_tagging', $category, 1, FALSE, $current_lang))) {
-      $options = $this->prepareTermOptions($current_lang_terms);
-    }
-    // Add a fallback to default language of the website if the current
-    // language has no terms.
-    elseif (!empty($default_lang_terms = $this->entityTypeManager->getStorage('taxonomy_term')->loadTree('social_tagging', $category, 1, FALSE))) {
-      $options = $this->prepareTermOptions($default_lang_terms);
-    }
-
-    // Return array.
-    return $options;
-  }
-
-  /**
-   * Returns all the children of top level term items.
-   *
-   * @return array
-   *   An array of child items.
-   */
-  public function getAllChildren() {
+  public function getAllChildren(): array {
     // Define as array.
     $options = [];
 
@@ -213,17 +341,9 @@ class SocialTaggingService {
   }
 
   /**
-   * Returns a multilevel tree.
-   *
-   * @param array $term_ids
-   *   An array of items that are selected.
-   * @param string $entity_type
-   *   The entity type these tags are for.
-   *
-   * @return array
-   *   An hierarchy array of items with their parent.
+   * {@inheritdoc}
    */
-  public function buildHierarchy(array $term_ids, $entity_type) {
+  public function buildHierarchy(array $term_ids, string $entity_type): array {
     $tree = [];
     // Load all the terms together.
     if (!empty($terms = $this->entityTypeManager->getStorage('taxonomy_term')->loadMultiple(array_column($term_ids, 'target_id')))) {
@@ -235,9 +355,14 @@ class SocialTaggingService {
       $allowSplit = $this->allowSplit();
 
       // Set the route.
-      $route = ($entity_type == 'group') ? 'view.search_groups.page_no_value' : 'view.search_content.page_no_value';
-      if ($entity_type == 'profile') {
+      if ($entity_type === 'group') {
+        $route = 'view.search_groups.page_no_value';
+      }
+      elseif ($entity_type === 'profile') {
         $route = 'view.search_users.page_no_value';
+      }
+      else {
+        $route = 'view.search_content.page_no_value';
       }
 
       // Build the hierarchy.
@@ -251,18 +376,33 @@ class SocialTaggingService {
         }
         // Get current terms parents.
         if ($parents = $this->entityTypeManager->getStorage('taxonomy_term')->loadParents($current_term->id())) {
+          /** @var \Drupal\taxonomy\Entity\Term $parent */
           $parent = reset($parents);
-          $category_label = $parent->hasTranslation($langcode) ? $parent->getTranslation($langcode)
-            ->getName() : $parent->getName();
+          if ($parent->hasTranslation($langcode)) {
+            /** @var \Drupal\taxonomy\Entity\Term $translated_term */
+            $translated_term = $parent->getTranslation($langcode);
+            $category_label = $translated_term->getName();
+          }
+          else {
+            $category_label = $parent->getName();
+          }
         }
         // Or add the parent term itself if it connected to the content.
         else {
-          $category_label = $current_term->hasTranslation($langcode) ? $current_term->getTranslation($langcode)
-            ->getName() : $current_term->getName();
+          if ($current_term->hasTranslation($langcode)) {
+            /** @var \Drupal\taxonomy\Entity\Term $translated_term */
+            $translated_term = $current_term->getTranslation($langcode);
+            $category_label = $translated_term->getName();
+          }
+          else {
+            $category_label = $current_term->getName();
+          }
           $parent = $current_term;
         }
-        // Prepare the parameter;.
-        $parameter = $allowSplit ? social_tagging_to_machine_name($category_label) : 'tag';
+
+        // Prepare the parameter.
+        $parameter = $allowSplit
+          ? $this->machineName->transform($category_label) : 'tag';
 
         $route_parameters = [
           $parameter . '[]' => $current_term->id(),
@@ -276,9 +416,19 @@ class SocialTaggingService {
 
         // Finally, prepare the hierarchy.
         $tree[$parent->id()]['title'] = $category_label;
+
+        if ($current_term->hasTranslation($langcode)) {
+          /** @var \Drupal\taxonomy\Entity\Term $translated_term */
+          $translated_term = $current_term->getTranslation($langcode);
+          $term_name = $translated_term->getName();
+        }
+        else {
+          $term_name = $current_term->getName();
+        }
+
         $tree[$parent->id()]['tags'][$current_term->id()] = [
           'url' => $url,
-          'name' => $current_term->hasTranslation($langcode) ? $current_term->getTranslation($langcode)->getName() : $current_term->getName(),
+          'name' => $term_name,
         ];
       }
     }
@@ -292,18 +442,136 @@ class SocialTaggingService {
    *
    * @param array $terms
    *   Array of terms.
-   *
-   * @return array
-   *   Returns a list of terms options.
    */
-  private function prepareTermOptions(array $terms) {
+  protected function prepareTermOptions(array $terms): array {
     $options = [];
+
     foreach ($terms as $category) {
-      if ((bool) $category->status) {
+      if ($category->status) {
         $options[$category->tid] = $category->name;
       }
     }
 
+    return $options;
+  }
+
+  /**
+   * Prepares settings of a supported entity type.
+   *
+   * @param array $items
+   *   The modified settings structure is keyed by entity type identifiers.
+   * @param array $item
+   *   The current entity type settings.
+   */
+  private function type(array &$items, array $item): void {
+    $entity_type = $item['entity_type'];
+
+    unset($item['entity_type']);
+
+    $items[$entity_type]['sets'][] = $item;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function types(bool $short = FALSE): array {
+    $items = [];
+
+    $this->moduleHandler->invokeAllWith(
+      self::HOOK,
+      function (callable $hook, string $module) use (&$items) {
+        if (is_array($item = $hook())) {
+          if (isset($item['entity_type'])) {
+            $this->type($items, $item);
+          }
+          else {
+            foreach ($item as $sub_item) {
+              $this->type($items, $sub_item);
+            }
+          }
+        }
+        else {
+          $items[$item] = ['sets' => [[]]];
+        }
+      },
+    );
+
+    $this->moduleHandler->alter(self::HOOK, $items);
+
+    foreach ($items as &$item) {
+      if (is_array($item)) {
+        foreach ($item as $key => $value) {
+          if (is_numeric($key)) {
+            foreach ($item['sets'] as &$set) {
+              $set['bundles'][] = $value;
+            }
+
+            unset($item[$key]);
+          }
+        }
+
+        if (isset($item['sets'])) {
+          $item += $item['sets'];
+
+          unset($item['sets']);
+        }
+      }
+      else {
+        $item = [[]];
+      }
+    }
+
+    return $short ? array_keys($items) : $items;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function getKeyValueOptions(): array {
+    $types = $this->types();
+    ksort($types);
+    asort($types);
+    $settings = $this->configFactory->get('social_tagging.settings');
+    $options = [];
+    foreach ($types as $entity_type => $item) {
+      $definition = $this->entityTypeManager->getDefinition($entity_type);
+      if (!$definition instanceof EntityTypeInterface) {
+        continue;
+      }
+      $item = array_filter($item);
+      // Empty value means there is no bundles.
+      if (empty($item)) {
+        // Filter entities that are not enabled for the platform.
+        if (!empty($settings->get("tag_type_$entity_type"))) {
+          $options[$entity_type] = $definition->getLabel();
+        }
+        continue;
+      }
+      foreach ($item as $value) {
+        $bundle_entity_type = $definition->getBundleEntityType();
+        if (!isset($value['bundles']) || empty($bundle_entity_type)) {
+          continue;
+        }
+        // Special label for nodes.
+        $label = $entity_type === 'node' ? $this->t('Node') : $definition->getLabel();
+        // Go foreach bundle to get key and label.
+        foreach ($value['bundles'] as $bundle) {
+          $bundle_entity = $this->entityTypeManager->getStorage($bundle_entity_type)->load($bundle);
+          if (!$bundle_entity instanceof EntityInterface) {
+            continue;
+          }
+          $title = $this->t('@entity_type type: @bundle', [
+            '@entity_type' => $label,
+            '@bundle' => $bundle_entity->label(),
+          ]);
+          // Filter entities that are not enabled for the platform.
+          if (!empty($settings->get("tag_{$entity_type}_type_$bundle"))) {
+            // Key now contains type and bundle.
+            $options[$entity_type . '_' . $bundle] = $title;
+          }
+        }
+      }
+    }
     return $options;
   }
 

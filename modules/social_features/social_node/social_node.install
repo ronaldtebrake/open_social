@@ -12,3 +12,10 @@ function social_node_install() {
   // Set the view mode to use when shown in activities.
   activity_creator_set_entity_view_mode('node', 'activity');
 }
+
+/**
+ * Implements hook_update_last_removed().
+ */
+function social_node_update_last_removed() : int {
+  return 11901;
+}

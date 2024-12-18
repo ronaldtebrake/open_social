@@ -85,13 +85,11 @@ function social_follow_content_event_enrollment_follow(EntityInterface $entity) 
 
     if (empty($flagging)) {
       $flagging = Flagging::create($properties);
-      if ($flagging) {
-        $flagging->save();
-        // No need to set a message if the user got enrolled by someone else.
-        if ($account->id() === $entity->field_account->target_id) {
-          $message = t('You have successfully enrolled to this event. Also you are now following the event, which means you will receive notifications when a new comment is placed.');
-          \Drupal::messenger()->addStatus($message);
-        }
+      $flagging->save();
+      // No need to set a message if the user got enrolled by someone else.
+      if ($account->id() === $entity->field_account->target_id) {
+        $message = t('You have successfully enrolled to this event. Also you are now following the event, which means you will receive notifications when a new comment is placed.');
+        \Drupal::messenger()->addStatus($message);
       }
     }
   }
@@ -103,15 +101,17 @@ function social_follow_content_event_enrollment_follow(EntityInterface $entity) 
  * Adds the "Following" link to the user menu.
  */
 function social_follow_content_social_user_account_header_account_links(array $context) {
+  $link = Link::createFromRoute((new TranslatableMarkup('Following')), 'view.following.following');
+
   return [
     'my_content' => [
       '#type' => 'link',
       '#attributes' => [
         'title' => new TranslatableMarkup("View content I'm following"),
       ],
-      '#title' => new TranslatableMarkup('Following'),
       '#weight' => 1000,
-    ] + Url::fromRoute('view.following.following')->toRenderArray(),
+      '#access' => $link->getUrl()->access(),
+    ] + $link->toRenderable(),
   ];
 }
 

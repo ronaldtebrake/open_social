@@ -1,7 +1,7 @@
 name: 'Social Mentions'
 description: 'Provide mentions feature for Open Social.'
 type: module
-core_version_requirement: ^9
+core_version_requirement: ^9 || ^10
 dependencies:
   - social:activity_logger
   - dynamic_entity_reference:dynamic_entity_reference
@@ -14,4 +14,5 @@ dependencies:
   - social:social_core
   - social:social_editor
   - social:social_profile
+  - jquery_ui_autocomplete:jquery_ui_autocomplete
 package: Social

@@ -34,12 +34,15 @@ class SocialGroupSelection extends DefaultSelection {
         $all_group_types = $configuration['target_bundles'];
       }
     }
+    elseif ($configuration['target_bundles'] === NULL) {
+      return $query;
+    }
 
     $plugin_id = 'group_node:' . $configuration['entity']->bundle();
     $storage = $this->entityTypeManager->getStorage('group_type');
 
     if (!$all_group_types) {
-      $all_group_types = $storage->getQuery()->execute();
+      $all_group_types = $storage->getQuery()->accessCheck()->execute();
     }
 
     $excluded_group_types = [];
@@ -48,12 +51,12 @@ class SocialGroupSelection extends DefaultSelection {
       /** @var \Drupal\group\Entity\GroupTypeInterface $group_type */
       $group_type = $storage->load($group_type_id);
 
-      if (!$group_type->hasContentPlugin($plugin_id)) {
+      if (!$group_type->hasPlugin($plugin_id)) {
         $excluded_group_types[] = $group_type_id;
       }
     }
 
-    if ($excluded_group_types) {
+    if ($excluded_group_types && is_array($all_group_types)) {
       $diff = array_diff($all_group_types, $excluded_group_types);
       if (!empty($diff)) {
         $bundle = $this->entityTypeManager->getDefinition($configuration['target_type'])->getKey('bundle');

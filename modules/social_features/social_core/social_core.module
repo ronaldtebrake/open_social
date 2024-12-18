@@ -8,9 +8,12 @@
 use Drupal\block\Entity\Block;
 use Drupal\Core\Access\AccessResult;
 use Drupal\Core\Entity\Display\EntityFormDisplayInterface;
+use Drupal\Core\Entity\EntityFormInterface;
 use Drupal\Core\Field\FieldItemList;
-use Drupal\Core\File\FileSystemInterface;
+use Drupal\Core\File\FileExists;
 use Drupal\Core\Form\FormStateInterface;
+use Drupal\Core\Link;
+use Drupal\Core\Render\Element;
 use Drupal\file\Entity\File;
 use Drupal\filter\FilterFormatInterface;
 use Drupal\Core\Session\AccountInterface;
@@ -19,12 +22,15 @@ use Drupal\Core\Template\Attribute;
 use Drupal\Core\Url;
 use Drupal\filter\Entity\FilterFormat;
 use Drupal\group\Entity\Group;
+use Drupal\group\Entity\GroupInterface;
 use Drupal\image\Entity\ImageStyle;
+use Drupal\menu_link_content\MenuLinkContentInterface;
 use Drupal\node\NodeInterface;
 use Drupal\path\Plugin\Field\FieldWidget\PathWidget;
 use Drupal\user\Entity\User;
 use Drupal\user\UserInterface;
 use Drupal\Core\Entity\EntityInterface;
+use Drupal\block\BlockInterface;
 
 /**
  * Implements hook_page_attachments().
@@ -35,6 +41,11 @@ function social_core_page_attachments(array &$attachments) {
 
   // The library with logo improvements on the top of the gin toolbar.
   $attachments['#attached']['library'][] = 'social_core/admin-toolbar';
+
+  // The library with dialog popup improvements attached only for admin pages.
+  if (\Drupal::service('router.admin_context')->isAdminRoute()) {
+    $attachments['#attached']['library'][] = 'social_core/admin-dialog';
+  }
 }
 
 /**
@@ -55,6 +66,25 @@ function social_core_theme() {
       ],
     ],
   ];
+}
+
+/**
+ * Implements hook_module_implements_alter().
+ */
+function social_core_module_implements_alter(array &$implementations, string $hook): void {
+  switch ($hook) {
+    // See field_group_module_implements_alter()
+    // They are forcing the form_alter() to be executed last, Open Social
+    // has multiple form_alters that relies on #fieldgroup attribute so its very
+    // important that the field_group_form_alter() is executed before them.
+    case 'form_alter':
+      $altered_implementations = [
+        'field_group' => FALSE,
+      ];
+      unset($implementations['field_group']);
+      $implementations = array_merge($altered_implementations, $implementations);
+      break;
+  }
 }
 
 /**
@@ -128,7 +158,10 @@ function social_core_preprocess_node(&$variables) {
   // If machine name too long or using another image field.
   if (!$node->hasField($image_field)) {
     $node_fields = $node->getFields();
-    $image_fields = array_filter($node_fields, '_social_core_find_image_field');
+    $find_image_field = '_social_core_find_image_field';
+    assert(is_callable($find_image_field));
+    /** @var callable(Drupal\Core\Field\FieldItemListInterface<Drupal\Core\Field\FieldItemInterface>):bool|null $find_image_field */
+    $image_fields = array_filter($node_fields, $find_image_field);
 
     // Get the first image field of all the fields.
     if ($image_fields) {
@@ -198,6 +231,8 @@ function social_core_social_user_account_header_account_links(array $context) {
       ];
     }
 
+    $link = Link::createFromRoute($title, 'social_core.my_invites');
+
     return [
       'divider_no_mobile' => [
         '#wrapper_attributes' => [
@@ -211,9 +246,9 @@ function social_core_social_user_account_header_account_links(array $context) {
         '#attributes' => [
           'title' => new TranslatableMarkup('Invites'),
         ],
-        '#title' => $title,
         '#weight' => 350,
-      ] + Url::fromRoute('social_core.my_invites')->toRenderArray(),
+        '#access' => $link->getUrl()->access(),
+      ] + $link->toRenderable(),
     ];
   }
 }
@@ -285,7 +320,9 @@ function social_core_node_links_alter(array &$links, NodeInterface $entity, arra
     'activity_comment',
   ])) {
     // Add a readmore link.
-    $node_title_stripped = strip_tags($entity->label());
+    $label = $entity->label() instanceof TranslatableMarkup ? $entity->label()->render() : $entity->label();
+    $label = $label ?? '';
+    $node_title_stripped = strip_tags($label);
     $links['node']['#links']['node-readmore'] = [
       'title' => t('Read more<span class="visually-hidden"> about @title</span>', [
         '@title' => $node_title_stripped,
@@ -321,9 +358,9 @@ function social_core_preprocess_field(array &$variables) {
  * Implements hook_preprocess_block().
  */
 function social_core_preprocess_block(&$variables) {
-  /** @var \Drupal\user\Entity\User $account */
+  /** @var \Drupal\user\Entity\User|int $account */
   $account = \Drupal::routeMatch()->getParameter('user');
-  /** @var \Drupal\group\Entity\Group $group */
+  /** @var \Drupal\group\Entity\Group|int $group */
   $group = \Drupal::routeMatch()->getParameter('group');
 
   if (is_numeric($account)) {
@@ -398,7 +435,7 @@ function social_core_preprocess_block(&$variables) {
           'user' => $account->id(),
         ]);
         $variables['button_text'] = t('All @label', [
-          '@label' => $variables['label']['#markup'],
+          '@label' => $variables['label']['#markup'] ?? 'Events',
         ]);
       }
       break;
@@ -426,31 +463,37 @@ function social_core_preprocess_block(&$variables) {
       break;
 
     case 'group_members-block_newest_members':
-      $variables['subtitle'] = t('in the group');
-      $variables['view_all_path'] = Url::fromRoute('view.group_members.page_group_members', [
-        'group' => $group->id(),
-      ]);
-      $variables['button_text'] = $more_link;
-      $link->setOption('use_more', FALSE);
+      if ($group instanceof GroupInterface) {
+        $variables['subtitle'] = t('in the group');
+        $variables['view_all_path'] = Url::fromRoute('view.group_members.page_group_members', [
+          'group' => $group->id(),
+        ]);
+        $variables['button_text'] = $more_link;
+        $link->setOption('use_more', FALSE);
+      }
       break;
 
     case 'upcoming_events-upcoming_events_group':
-      $variables['subtitle'] = t('in the group');
-      $variables['view_all_path'] = Url::fromRoute('view.group_events.page_group_events', [
-        'group' => $group->id(),
-      ]);
-      $variables['button_text'] = t('All @label', [
-        '@label' => $variables['label']['#markup'],
-      ]);
+      if ($group instanceof GroupInterface) {
+        $variables['subtitle'] = t('in the group');
+        $variables['view_all_path'] = Url::fromRoute('view.group_events.page_group_events', [
+          'group' => $group->id(),
+        ]);
+        $variables['button_text'] = t('All @label', [
+          '@label' => $variables['label']['#markup'],
+        ]);
+      }
       break;
 
     case 'latest_topics-group_topics_block':
-      $variables['subtitle'] = t('in the group');
-      $variables['view_all_path'] = Url::fromRoute('view.group_topics.page_group_topics', [
-        'group' => $group->id(),
-      ]);
-      $variables['button_text'] = $more_link;
-      $link->setOption('use_more', FALSE);
+      if ($group instanceof GroupInterface) {
+        $variables['subtitle'] = t('in the group');
+        $variables['view_all_path'] = Url::fromRoute('view.group_topics.page_group_topics', [
+          'group' => $group->id(),
+        ]);
+        $variables['button_text'] = $more_link;
+        $link->setOption('use_more', FALSE);
+      }
       break;
   }
 }
@@ -486,6 +529,50 @@ function social_core_menu_local_tasks_alter(&$data, $route_name) {
   // Remove Delete tab. Delete will always go through Edit.
   if (isset($data['tabs'][0]['entity.node.delete_form'])) {
     unset($data['tabs'][0]['entity.node.delete_form']);
+  }
+
+  // Remove Revisions tab if revisions for the node not exist.
+  if ($entity = \Drupal::routeMatch()->getParameter('node') ?: \Drupal::routeMatch()->getParameter('group')) {
+    // Make sure $entity contains the entity object.
+    if (!$entity instanceof EntityInterface) {
+      $entity_type = \Drupal::routeMatch()->getParameter('node') ? 'node' : 'group';
+      $entity = \Drupal::entityTypeManager()->getStorage($entity_type)->load($entity);
+    }
+
+    // Check again to ensure $entity is an instance of EntityInterface.
+    if ($entity instanceof EntityInterface) {
+      // Get the configuration factory service.
+      $config_factory = \Drupal::service('config.factory');
+
+      // Load the configuration for the entity type.
+      $config = $config_factory->get($entity->getEntityTypeId() . '.type.' . $entity->bundle());
+
+      // If new revision is disabled.
+      if (!$config->get('new_revision')) {
+        if ($entity instanceof NodeInterface) {
+          // Handle node entities.
+          $storage = \Drupal::entityTypeManager()->getStorage('node');
+          $revisions = $storage->revisionIds($entity);
+
+          if ($revisions && count($revisions) === 1) {
+            unset($data['tabs'][0]['entity.node.version_history']);
+          }
+        }
+        elseif ($entity instanceof GroupInterface) {
+          // Query for all revisions of the group entity.
+          $query = \Drupal::entityQuery('group')
+            ->condition('id', $entity->id())
+            ->accessCheck(FALSE);
+
+          // Execute the query to get revision IDs.
+          $revision_ids = $query->execute();
+
+          if ($revision_ids && count($revision_ids) === 1) {
+            unset($data['tabs'][0]['entity.version_history:group.version_history']);
+          }
+        }
+      }
+    }
   }
 
 }
@@ -629,24 +716,32 @@ function social_core_filter_process_format($element) {
  * Implements hook_block_access().
  */
 function social_core_block_access(Block $block, $operation, AccountInterface $account) {
-  $blocks = &drupal_static(__FUNCTION__);
-  $blocks = [];
+  $blocks = &drupal_static(__FUNCTION__, []);
 
-  // First check if we have it cached before we run the modulehandler alter.
-  /** @var \Drupal\Core\Cache\CacheBackendInterface $cache */
-  $cache = \Drupal::service('cache.default');
-  if ($cache->get('social_core.block_visibility_cache') === FALSE) {
-    // Allow other modules to change the block visibility.
-    $blocks = \Drupal::moduleHandler()->invokeAll('social_core_block_visibility_path');
-
-    // Set the cache expire to 1 week.
-    $date = new DateTime(date('Y-m-d'));
-    $date->modify('+7 day');
-
-    $cache->set('social_core.block_visibility_cache', $blocks, $date->getTimestamp(), ['social_core.block_visibility_cache']);
+  // We only care about view operations right now.
+  if ($operation !== 'view') {
+    return AccessResult::neutral();
   }
-  else {
-    $blocks = $cache->get('social_core.block_visibility_cache')->data;
+
+  // If we didnt have statically cached blocks,
+  // lets see if we can grab it from the cache instead.
+  if (empty($blocks)) {
+    // First check if we have it cached before we run the modulehandler alter.
+    /** @var \Drupal\Core\Cache\CacheBackendInterface $cache */
+    $cache = \Drupal::service('cache.default');
+    if ($cache->get('social_core.block_visibility_cache') === FALSE) {
+      // Allow other modules to change the block visibility.
+      $blocks = \Drupal::moduleHandler()->invokeAll('social_core_block_visibility_path');
+
+      // Set the cache expire to 1 week.
+      $date = new DateTime(date('Y-m-d'));
+      $date->modify('+7 day');
+
+      $cache->set('social_core.block_visibility_cache', $blocks, $date->getTimestamp(), ['social_core.block_visibility_cache']);
+    }
+    else {
+      $blocks = $cache->get('social_core.block_visibility_cache')->data;
+    }
   }
 
   // Alter the access based on the blocks array.
@@ -662,14 +757,37 @@ function social_core_block_access(Block $block, $operation, AccountInterface $ac
     }
   }
 
+  // Make sure that socialblue_pagetitleblock_content doesn't show on nodes
+  // pages. We can't add visibility 'entity_bundle:node' whether 'group_type'
+  // since the block will disappear from pages like Access denied and some tests
+  // will be failed. So, let's hide the block for node canonical instead.
+  if (
+    $operation === 'view' &&
+    $block->getPluginId() === 'social_page_title_block' &&
+    $block->id() === 'socialblue_pagetitleblock_content'
+  ) {
+    /** @var \Drupal\node\Entity\Node $node */
+    $node = \Drupal::routeMatch()->getParameter('node');
+    // Get the route name.
+    $route_name = \Drupal::routeMatch()->getRouteName();
+
+    // If it is a node we prevent the block from showing.
+    if (
+      $node instanceof NodeInterface &&
+      $route_name === 'entity.node.canonical'
+    ) {
+      return AccessResult::forbidden();
+    }
+  }
+
   // No opinion.
   return AccessResult::neutral();
 }
 
 /**
- * Implements hook_field_widget_form_alter().
+ * Implements hook_field_widget_single_element_form_alter().
  */
-function social_core_field_widget_form_alter(&$element, FormStateInterface $form_state, $context) {
+function social_core_field_widget_single_element_form_alter(&$element, FormStateInterface $form_state, $context) {
   $field_definition = $context['items']->getFieldDefinition();
 
   if ($field_definition->getType() === 'path') {
@@ -708,10 +826,6 @@ function social_core_field_widget_form_alter(&$element, FormStateInterface $form
 
     $element['#element_validate'] = ['social_core_path_validate'];
   }
-  if ($field_definition->getType() === 'address') {
-    $default_country = \Drupal::config('system.date')->get('country.default');
-    $element['address']['#default_value']['country_code'] = $element['address']['#default_value']['country_code'] ?? $default_country;
-  }
 }
 
 /**
@@ -748,9 +862,13 @@ function social_core_path_validate(array &$element, FormStateInterface $form_sta
 }
 
 /**
- * Implements hook_form_FORM_ID_alter().
+ * Implements hook_form_alter().
  */
-function social_core_form_node_form_alter(&$form, FormStateInterface $form_state, $form_id) {
+function social_core_form_alter(
+  array &$form,
+  FormStateInterface $form_state,
+  string $form_id
+): void {
   // Array of node types, which have the new group_settings fieldset,
   // these nodes can use the new content style, and have $form['advanced']
   // removed.
@@ -776,6 +894,12 @@ function social_core_form_node_form_alter(&$form, FormStateInterface $form_state
   // old settings and use Field UI to change the other fields.
   $use_social_content_forms = theme_get_setting('content_entity_form_style');
   if ($use_social_content_forms === 'open_social' && in_array($form_id, $compatible_content_type_forms)) {
+    $form_object = $form_state->getFormObject();
+
+    if ($form_object instanceof EntityFormInterface) {
+      $entity = $form_object->getEntity();
+    }
+
     // We want to move all the fields from $form['advanced'] to our new
     // field sets which are created as part of #3186003.
     if (!empty($form['advanced'])) {
@@ -825,22 +949,21 @@ function social_core_form_node_form_alter(&$form, FormStateInterface $form_state
         // #502430 we need to remove this ourselves, users with permission
         // can see the book outline even when not configured as part
         // of the book settings.
-        if (!empty($form['book']) &&
-          $form_state->getFormObject() !== NULL &&
-          \Drupal::moduleHandler()->moduleExists('book')) {
-          // Grab the Entity to see if books are enabled for this one.
-          $entity = $form_state->getFormObject()->getEntity();
-          if (!empty($entity->getType()) && is_string($entity->getType())) {
-            // Move it to our new fieldset on book pages either on its own
-            // or in the group_settings.
-            $form['book']['#type'] = 'fieldset';
-            $form['book']['#attributes']['class'][] = 'card';
-            $form['book']['#weight'] = isset($form['#fieldgroups']['group_visibility']->weight) ? $form['#fieldgroups']['group_visibility']->weight + 1 : '3';
-            $enabled = book_type_is_allowed($entity->getType());
-            // If it's not enabled we can just safely unset it.
-            if (!$enabled) {
-              unset($form['book']);
-            }
+        if (
+          !empty($form['book']) &&
+          isset($entity) &&
+          \Drupal::moduleHandler()->moduleExists('book')
+        ) {
+          // Move it to our new fieldset on book pages either on its own
+          // or in the group_settings.
+          $form['book']['#type'] = 'fieldset';
+          $form['book']['#attributes']['class'][] = 'card';
+          $form['book']['#weight'] = isset($form['#fieldgroups']['group_visibility']->weight)
+            ? $form['#fieldgroups']['group_visibility']->weight + 1 : '3';
+
+          // If it's not enabled we can just safely unset it.
+          if (!book_type_is_allowed($entity->bundle())) {
+            unset($form['book']);
           }
         }
 
@@ -859,7 +982,7 @@ function social_core_form_node_form_alter(&$form, FormStateInterface $form_state
         }
 
         // Move the Published status to group settings with a new wrapper.
-        if (!empty($form['status'])) {
+        if (!empty($form['status']) && Element::isVisibleElement($form['status'])) {
           // Add an details element to status.
           $form['status_label'] = [
             '#type' => 'details',
@@ -874,38 +997,44 @@ function social_core_form_node_form_alter(&$form, FormStateInterface $form_state
           unset($form['status']);
         }
 
-        // Node author information for administrators.
-        $form['author_info'] = [
-          '#type' => 'details',
-          '#title' => t('Author Information'),
-          '#description' => '',
-          '#open' => TRUE,
-          '#weight' => 100,
-          '#group' => 'group_settings',
-        ];
-
-        // Move author uid to the new author info fieldset,
+        // Move author uid and/or created to the new author info fieldset,
         // and remove descriptive text.
-        if (isset($form['uid'])) {
-          $form['uid']['#group'] = 'author_info';
-          $form['uid']['widget']['#description'] = '';
-          if (!empty($form['uid']['widget'][0]['target_id'])) {
-            $form['uid']['widget'][0]['target_id']['#description'] = '';
+        foreach (['uid', 'created'] as $key) {
+          if (isset($form[$key]) && Element::isVisibleElement($form[$key])) {
+            $field = &$form[$key];
+            $field['#group'] = 'author_info';
+            $field['widget']['#description'] = '';
+
+            if ($key === 'uid') {
+              if (!empty($field['widget'][0]['target_id'])) {
+                $field['widget'][0]['target_id']['#description'] = '';
+              }
+            }
+            else {
+              $field['widget'][0]['#description'] = '';
+              $field['widget'][0]['value']['#description'] = '';
+            }
+
+            $form['author_info'][$key] = $form[$key];
+
+            unset($form[$key]);
           }
-          $form['author_info']['uid'] = $form['uid'];
-          unset($form['uid']);
         }
 
-        // Move created to the new author info fieldset,
-        // and remove descriptive text.
-        if (isset($form['created'])) {
-          $form['created']['#group'] = 'author_info';
-          $form['created']['widget']['#description'] = '';
-          $form['created']['widget'][0]['#description'] = '';
-          $form['created']['widget'][0]['value']['#description'] = '';
-          $form['author_info']['created'] = $form['created'];
-          unset($form['created']);
+        if (isset($form['author_info'])) {
+          // Node author information for administrators.
+          $form['author_info'] += [
+            '#type' => 'details',
+            '#title' => t('Author Information'),
+            '#description' => '',
+            '#open' => TRUE,
+            '#weight' => 100,
+            '#group' => 'group_settings',
+          ];
         }
+
+        // Add validation for created date.
+        array_unshift($form['#validate'], '_social_core_created_date_validation');
 
         $has_option_fields = FALSE;
 
@@ -942,23 +1071,39 @@ function social_core_form_node_form_alter(&$form, FormStateInterface $form_state
     // Change the button text from Save to Create topic / event etc.
     // Adds a cancel button.
     // Removes the preview button.
-    if (!empty($form['actions']['submit']) &&
-      !empty($form['actions']['submit']['#value']) &&
-      $form_state->getFormObject() !== NULL &&
-      method_exists($form_state->getFormObject(), 'getOperation')) {
+    if (!empty($form['actions']['submit']['#value']) && isset($entity)) {
 
       // Change the button text from Save to Create topic / event etc.
-      // Only on node add pages.
-      if ($form_state->getFormObject()->getOperation() !== 'edit') {
-        /** @var \Drupal\Node\NodeInterface $entity */
-        $entity = $form_state->getFormObject()->getEntity();
-        if (!empty(node_get_type_label($entity)) && is_string(node_get_type_label($entity))) {
-          $form['actions']['submit']['#value'] = t('Create @entity', ['@entity' => strtolower(node_get_type_label($entity))]);
+      /** @var \Drupal\Core\Entity\EntityFormInterface $form_object */
+      if ($form_object->getOperation() !== 'edit') {
+        $definition = \Drupal::entityTypeManager()
+          ->getDefinition($entity->getEntityTypeId());
+
+        if ($definition !== NULL) {
+          $bundle_entity_type = $definition->getBundleEntityType();
+
+          if ($bundle_entity_type !== NULL) {
+            $bundle_entity = \Drupal::entityTypeManager()
+              ->getStorage($bundle_entity_type)
+              ->load($entity->bundle());
+
+            if (
+              $bundle_entity !== NULL &&
+              ($label = $bundle_entity->label()) !== NULL
+            ) {
+              $form['actions']['submit']['#value'] = t('Create @entity', [
+                '@entity' => strtolower((string) $label),
+              ]);
+            }
+          }
         }
       }
 
       // Adds cancel button.
-      if (!isset($form['actions']['cancel'])) {
+      if (
+        !isset($form['actions']['cancel']) &&
+        $entity->getEntityTypeId() === 'node'
+      ) {
         $form['actions']['cancel'] = [
           '#type' => 'submit',
           '#value' => t('Cancel'),
@@ -975,6 +1120,31 @@ function social_core_form_node_form_alter(&$form, FormStateInterface $form_state
         unset($form['actions']['preview']);
       }
     }
+  }
+}
+
+/**
+ * Custom form validation handler for validating created date.
+ *
+ * @param array $form
+ *   The form array.
+ * @param \Drupal\Core\Form\FormStateInterface $form_state
+ *   Form state.
+ *
+ * @throws \Drupal\Core\Entity\EntityStorageException
+ */
+function _social_core_created_date_validation(array $form, FormStateInterface $form_state): void {
+  $created = $form_state->getValue('created');
+  if (!$created) {
+    return;
+  }
+
+  $date = end($created);
+  /** @var \Drupal\Core\Datetime\DrupalDateTime $date */
+  $date = $date['value'];
+
+  if ($date->getTimestamp() > time()) {
+    $form_state->setErrorByName('created', t('The created date cannot be in the future.'));
   }
 }
 
@@ -1054,7 +1224,7 @@ function _social_core_set_default_email_logo_for_socialblue() {
   // Only when socialblue is default we continue.
   if (\Drupal::configFactory()->get('system.theme')->get('default') === 'socialblue') {
     $logo = theme_get_setting('logo.url', 'socialblue');
-    $basetheme_url = drupal_get_path('theme', 'socialblue');
+    $basetheme_url = \Drupal::service('extension.list.theme')->getPath('socialblue');
     // Only if the theme setting for the logo, is still the socialblue
     // default logo, we can update our default logo.
     // If someone changed it to their own branding, let's not update it
@@ -1071,7 +1241,7 @@ function _social_core_set_default_email_logo_for_socialblue() {
       // socialblue logo we can continue.
       if (empty($default_image) || $default_image === $basetheme_url . DIRECTORY_SEPARATOR . 'logo.svg') {
         $file_system = \Drupal::service('file_system');
-        $uri = $file_system->copy($basetheme_url . DIRECTORY_SEPARATOR . 'logo_email.png', 'public://logo_email.png', FileSystemInterface::EXISTS_REPLACE);
+        $uri = $file_system->copy($basetheme_url . DIRECTORY_SEPARATOR . 'logo_email.png', 'public://logo_email.png', FileExists::Replace);
 
         $media = File::create([
           'uri' => $uri,
@@ -1140,55 +1310,58 @@ function social_core_preprocess_flag(array &$variables): void {
  * Get all default main menu links that ships with Open Social.
  */
 function _social_core_default_main_menu_links() {
-  $default_os_links = [
-    'Home' => [
-      'link' => 'internal:/',
-      'menu_name' => 'main',
-    ],
-    'Explore' => [
-      'link' => 'internal:',
-      'menu_name' => 'main',
-    ],
-  ];
-
-  $entity_type_manager = \Drupal::entityTypeManager();
-  $menu_links = $entity_type_manager
-    ->getStorage('menu_link_content')
-    ->loadByProperties(['menu_name' => 'main']);
-
-  $links = [];
-
-  /** @var \Drupal\menu_link_content\MenuLinkContentInterface $link */
-  foreach ($menu_links as $link) {
-    if (!in_array($link->getTitle(), array_keys($default_os_links))) {
-      continue;
-    }
-
-    $os_link = $default_os_links[$link->getTitle()];
-    $link_uri = $link->get('link')->getValue();
-    $link_uri = end($link_uri);
-    $link_uri = $link_uri['uri'];
-    if ($link_uri !== $os_link['link']) {
-      continue;
-    }
-
-    if ($link->getMenuName() !== $os_link['menu_name']) {
-      continue;
-    }
-
-    $links[] = $link;
-  }
-
-  // Enable modules to alter the list.
-  \Drupal::moduleHandler()->invokeAll(
-    'social_core_default_main_menu_links_alter',
-    [&$links]
-  );
-
   // If user has a permission to bypass all the restrictions, then
   // we don't return any links.
   if (\Drupal::currentUser()->hasPermission('bypass social_core menu links access')) {
     return [];
+  }
+
+  $links = &drupal_static(__FUNCTION__);
+
+  if (empty($links)) {
+    $default_os_links = [
+      'Home' => [
+        'link' => 'internal:/',
+        'menu_name' => 'main',
+      ],
+      'Explore' => [
+        'link' => 'internal:',
+        'menu_name' => 'main',
+      ],
+    ];
+
+    $entity_type_manager = \Drupal::entityTypeManager();
+    $menu_links = $entity_type_manager
+      ->getStorage('menu_link_content')
+      ->loadByProperties(['menu_name' => 'main']);
+
+    $links = [];
+
+    /** @var \Drupal\menu_link_content\MenuLinkContentInterface $link */
+    foreach ($menu_links as $link) {
+      if (!in_array($link->getTitle(), array_keys($default_os_links))) {
+        continue;
+      }
+
+      $os_link = $default_os_links[$link->getTitle()];
+      $link_uri = $link->get('link')->getValue();
+      $link_uri = end($link_uri);
+      $link_uri = $link_uri['uri'];
+      if ($link_uri !== $os_link['link']) {
+        continue;
+      }
+
+      if ($link->getMenuName() !== $os_link['menu_name']) {
+        continue;
+      }
+
+      $links[] = $link;
+    }
+    // Enable modules to alter the list.
+    \Drupal::moduleHandler()->invokeAll(
+      'social_core_default_main_menu_links_alter',
+      [&$links]
+    );
   }
 
   return $links;
@@ -1202,30 +1375,36 @@ function _social_core_default_main_menu_links() {
 function social_core_entity_access(EntityInterface $entity, string $operation, AccountInterface $account) {
   $entity_type = $entity->getEntityTypeId();
 
-  if ($entity_type !== 'menu_link_content') {
-    return;
-  }
+  if (
+    ($entity_type === 'menu_link_content')
+    && $operation !== 'view'
+    && $account->isAuthenticated()
+    && !$account->hasPermission('bypass social_core menu links access')
+    && $account->hasPermission('administer menu')
+  ) {
+    /** @var \Drupal\menu_link_content\MenuLinkContentInterface $entity */
+    $name = $entity->getTitle();
+    $link = $entity->get('link')->getValue();
+    $link = end($link);
 
-  if ($operation === 'view') {
-    return;
-  }
+    $default_os_links = _social_core_default_main_menu_links();
 
-  /** @var \Drupal\menu_link_content\MenuLinkContentInterface $entity */
-  $name = $entity->getTitle();
-  $link = $entity->get('link')->getValue();
-  $link = end($link);
+    /** @var \Drupal\menu_link_content\MenuLinkContentInterface $os_link */
+    foreach ($default_os_links as $os_link) {
+      // Ensure that we have link instance.
+      if (!($os_link instanceof MenuLinkContentInterface)) {
+        continue;
+      }
 
-  $default_os_links = _social_core_default_main_menu_links();
-
-  /** @var \Drupal\menu_link_content\MenuLinkContentInterface $os_link */
-  foreach ($default_os_links as $os_link) {
-    $os_link_title = $os_link->getTitle();
-    $os_link_uri = $entity->get('link')->getValue();
-    $os_link_uri = end($os_link_uri)['uri'];
-    if ($name === $os_link_title && $link['uri'] === $os_link_uri) {
-      return AccessResult::forbidden();
+      $os_link_title = $os_link->getTitle();
+      $os_link_uri = $entity->get('link')->getValue();
+      $os_link_uri = end($os_link_uri)['uri'];
+      if ($name === $os_link_title && $link['uri'] === $os_link_uri) {
+        return AccessResult::forbidden();
+      }
     }
   }
+  return AccessResult::neutral();
 }
 
 /**
@@ -1248,5 +1427,104 @@ function social_core_form_menu_edit_form_alter(array &$form, FormStateInterface 
   foreach ($os_links_ids as $menu_id) {
     unset($form['links']['links'][$menu_id]['operations']['#links']['edit']);
     unset($form['links']['links'][$menu_id]['operations']['#links']['delete']);
+  }
+}
+
+/**
+ * Add new paths where blocks should be displayed.
+ *
+ * @param string $pages
+ *   The current sequence of block paths.
+ * @param array $paths
+ *   List of blocks which should be updated and paths which should be added.
+ *
+ * @return string
+ *   List of block paths with new paths.
+ */
+function _social_core_blocks_paths(string $pages, array $paths): string {
+  return $pages . "\r\n" . implode("\r\n", $paths);
+}
+
+/**
+ * Removes paths where blocks should be displayed.
+ *
+ * @param string $pages
+ *   The current sequence of block paths.
+ * @param array $paths
+ *   List of blocks which should be updated and paths which should be added.
+ *
+ * @return string
+ *   List of block paths with new paths.
+ */
+function _social_core_blocks_unset_paths(string $pages, array $paths): string {
+  $pages = explode("\r\n", $pages);
+
+  foreach ($pages as $delta => $page) {
+    if (in_array($page, $paths)) {
+      unset($pages[$delta]);
+    }
+  }
+
+  return implode("\r\n", $pages);
+}
+
+/**
+ * Process list of pages where chosen blocks should be shown.
+ *
+ * @param array $items
+ *   Paths of blocks.
+ * @param callable|null $function
+ *   (optional) The function which updates the pages set. Defaults to NULL.
+ */
+function _social_core_install_blocks(array $items, callable $function = NULL): void {
+  if (!is_callable($function)) {
+    $function = '_social_core_blocks_paths';
+  }
+
+  $storage = \Drupal::entityTypeManager()->getStorage('block');
+
+  foreach ($items as $id => $paths) {
+    $block = $storage->load($id);
+
+    if (!$block instanceof BlockInterface) {
+      continue;
+    }
+
+    /** @var \Drupal\system\Plugin\Condition\RequestPath $visibility */
+    $visibility = $block->getVisibilityCondition('request_path');
+
+    $configuration = $visibility->getConfiguration();
+    $pages = $function($configuration['pages'], (array) $paths);
+
+    if ($configuration['pages'] !== $pages) {
+      $configuration['pages'] = $pages;
+      $block->setVisibilityConfig('request_path', $configuration)->save();
+    }
+  }
+}
+
+/**
+ * Implements hook_entity_update().
+ */
+function social_core_entity_update(EntityInterface $entity): void {
+  // Get the original status from the current entity.
+  $original_status = NULL;
+  if (isset($entity->original) && isset($entity->original->status)) {
+    $original_status = (bool) $entity->original->status->value;
+  }
+
+  // Get the new status from the current entity.
+  $new_status = isset($entity->status) ? (bool) $entity->status->value : NULL;
+
+  // If the status changed (published/unpublished), trigger the custom hooks.
+  if ($original_status != $new_status) {
+    // Entity has been published.
+    if ($new_status == 1) {
+      \Drupal::moduleHandler()->invokeAll('social_core_' . $entity->getEntityTypeId() . '_published', [$entity]);
+    }
+    // Entity has been unpublished.
+    elseif ($new_status == 0) {
+      \Drupal::moduleHandler()->invokeAll('social_core_' . $entity->getEntityTypeId() . '_unpublished', [$entity]);
+    }
   }
 }

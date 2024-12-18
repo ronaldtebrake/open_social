@@ -4,20 +4,95 @@ namespace Drupal\social_event_addtocal\Plugin;
 
 use Drupal\Component\Plugin\PluginBase;
 use Drupal\Component\Utility\Unicode;
+use Drupal\Core\Entity\EntityMalformedException;
+use Drupal\Core\Extension\ModuleExtensionList;
+use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
+use Drupal\Core\StringTranslation\StringTranslationTrait;
 use Drupal\Core\Url;
 use Drupal\datetime\Plugin\Field\FieldType\DateTimeItemInterface;
 use Drupal\node\NodeInterface;
+use Symfony\Component\DependencyInjection\ContainerInterface;
 
 /**
  * Base class for Social add to calendar plugins.
  */
-abstract class SocialAddToCalendarBase extends PluginBase implements SocialAddToCalendarInterface {
+abstract class SocialAddToCalendarBase extends PluginBase implements SocialAddToCalendarInterface, ContainerFactoryPluginInterface {
+
+  use StringTranslationTrait;
+
+  /**
+   * Default date modifications for all day events.
+   */
+  const END_DATE_MODIFICATION_DEFAULT_VALUE = '+ 1 day';
+
+  /**
+   * Default date format for all day event.
+   */
+  const ALL_DAY_FORMAT_DEFAULT_VALUE = 'Ymd';
+
+  /**
+   * Default date format.
+   */
+  const DATE_FORMAT_DEFAULT_VALUE = 'Ymd\THis';
+
+  /**
+   * Default date format if users timezone is UTC.
+   */
+  const UTC_DATE_FORMAT_DEFAULT_VALUE = 'Ymd\THis\Z';
+
+  /**
+   * The module extension list.
+   */
+  protected ModuleExtensionList $moduleExtensionList;
+
+  /**
+   * Constructs a SocialAddToCalendarBase object.
+   *
+   * @param array $configuration
+   *   A configuration array containing information about the plugin instance.
+   * @param string $plugin_id
+   *   The plugin_id for the plugin instance.
+   * @param mixed $plugin_definition
+   *   The plugin implementation definition.
+   * @param \Drupal\Core\Extension\ModuleExtensionList $extension_list_module
+   *   The module extension list.
+   */
+  public function __construct(array $configuration, $plugin_id, $plugin_definition, ModuleExtensionList $extension_list_module) {
+    parent::__construct($configuration, $plugin_id, $plugin_definition);
+    $this->moduleExtensionList = $extension_list_module;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public static function create(ContainerInterface $container, array $configuration, $plugin_id, $plugin_definition): self {
+    return new static(
+      $configuration,
+      $plugin_id,
+      $plugin_definition,
+      $container->get('extension.list.module'),
+    );
+  }
 
   /**
    * {@inheritdoc}
    */
   public function getName() {
-    return $this->pluginDefinition['label'];
+    return $this->pluginDefinition['label'] ?? '';
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function getIcon(): string {
+    $module_path = $this->moduleExtensionList
+      ->getPath('social_event_addtocal');
+
+    $plugin_icon = empty($this->pluginDefinition['id'])
+      ? '/assets/icons/default-calendar.svg'
+      : '/assets/icons/' . $this->pluginDefinition['id'] . '.svg';
+
+    return '/' . $module_path . $plugin_icon;
   }
 
   /**
@@ -34,7 +109,7 @@ abstract class SocialAddToCalendarBase extends PluginBase implements SocialAddTo
     return [
       'title' => $node->getTitle(),
       'dates' => $this->getEventDates($node),
-      'timezone' => date_default_timezone_get() !== DateTimeItemInterface::STORAGE_TIMEZONE ? date_default_timezone_get() : '',
+      'timezone' => date_default_timezone_get(),
       'description' => $this->getEventDescription($node),
       'location' => $this->getEventLocation($node),
       'nid' => $node->id(),
@@ -52,17 +127,17 @@ abstract class SocialAddToCalendarBase extends PluginBase implements SocialAddTo
     $date_time = [];
 
     // Set formats for event dates.
-    $format = $this->pluginDefinition['dateFormat'];
+    $format = $this->pluginDefinition['dateFormat'] ?? self::DATE_FORMAT_DEFAULT_VALUE;
     if (date_default_timezone_get() === DateTimeItemInterface::STORAGE_TIMEZONE) {
-      $format = $this->pluginDefinition['utcDateFormat'];
+      $format = $this->pluginDefinition['utcDateFormat'] ?? self::UTC_DATE_FORMAT_DEFAULT_VALUE;
     }
-    $all_day_format = $this->pluginDefinition['allDayFormat'];
+    $all_day_format = $this->pluginDefinition['allDayFormat'] ?? self::ALL_DAY_FORMAT_DEFAULT_VALUE;
 
     // Convert date to correct format.
     // Set dates array.
     if ($all_day) {
       $date_time['start'] = $start_date->format($all_day_format);
-      $end_date->modify($this->pluginDefinition['endDateModification']);
+      $end_date->modify($this->pluginDefinition['endDateModification'] ?? self::END_DATE_MODIFICATION_DEFAULT_VALUE);
       $date_time['end'] = $end_date->format($all_day_format);
     }
     else {
@@ -83,22 +158,20 @@ abstract class SocialAddToCalendarBase extends PluginBase implements SocialAddTo
    * {@inheritdoc}
    */
   public function getEventDescription(NodeInterface $node) {
-    // Get event description.
-    $description = $node->body->value;
+    // Get event URL.
+    // It is impossible to generate canonical absolute URL for an entity without
+    // ID - it will trigger EntityMalformedException. This could happen when
+    // previewing the node, in that case we don't have to render a description.
+    try {
+      $description = $this->t('See the event page for details: @link', ['@link' => $node->toUrl('canonical', ['absolute' => TRUE])->toString()]);
 
-    // Strings for replace.
-    $replace_strings = [
-      '&nbsp;' => '',
-      '<br />' => '',
-      PHP_EOL => '',
-    ];
-
-    // Replace node supported strings.
-    foreach ($replace_strings as $search => $replace) {
-      $description = str_replace($search, $replace, $description);
+      // Update event description with adding event link.
+      return Unicode::truncate(strip_tags($description), 1000, TRUE, TRUE);
+    }
+    catch (EntityMalformedException) {
+      return '';
     }
 
-    return Unicode::truncate(strip_tags($description), 1000, TRUE, TRUE);
   }
 
   /**

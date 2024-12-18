@@ -15,10 +15,10 @@ function social_profile_post_update_10101_profile_names_update(&$sandbox) {
   $profile_storage = \Drupal::entityTypeManager()->getStorage('profile');
 
   if (!isset($sandbox['count'])) {
-    $sandbox['ids'] = \Drupal::entityQuery('profile')
+    $query = \Drupal::entityQuery('profile')
       ->condition('type', 'profile')
-      ->accessCheck(FALSE)
-      ->execute();
+      ->accessCheck(FALSE);
+    $sandbox['ids'] = $query->execute();
     $sandbox['count'] = count($sandbox['ids']);
   }
 

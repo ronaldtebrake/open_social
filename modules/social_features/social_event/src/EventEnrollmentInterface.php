@@ -4,7 +4,9 @@ namespace Drupal\social_event;
 
 use Drupal\Core\Entity\ContentEntityInterface;
 use Drupal\Core\Entity\EntityChangedInterface;
+use Drupal\node\NodeInterface;
 use Drupal\user\EntityOwnerInterface;
+use Drupal\user\UserInterface;
 
 /**
  * Provides an interface for defining Event enrollment entities.
@@ -102,6 +104,22 @@ interface EventEnrollmentInterface extends ContentEntityInterface, EntityChanged
   public function setCreatedTime($timestamp);
 
   /**
+   * Gets the Event node entity that enrollment belongs.
+   *
+   * @return \Drupal\node\NodeInterface|null
+   *   Event node entity.
+   */
+  public function getEvent(): ?NodeInterface;
+
+  /**
+   * Gets sending confirmation email status after standalone enroll to event.
+   *
+   * @return bool
+   *   Confirmation status.
+   */
+  public function getEventStandaloneEnrollConfirmationStatus(): bool;
+
+  /**
    * Returns the Event enrollment published status indicator.
    *
    * Unpublished Event enrollment are only visible to restricted users.
@@ -121,5 +139,21 @@ interface EventEnrollmentInterface extends ContentEntityInterface, EntityChanged
    *   The called Event enrollment entity.
    */
   public function setPublished($published);
+
+  /**
+   * Gets enroller id.
+   *
+   * @return string|null
+   *   The user entity id.
+   */
+  public function getAccount(): ?string;
+
+  /**
+   * Gets enroller entity.
+   *
+   * @return \Drupal\user\UserInterface|null
+   *   The user entity or NULL.
+   */
+  public function getAccountEntity(): ?UserInterface;
 
 }

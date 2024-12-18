@@ -2,15 +2,15 @@
 
 namespace Drupal\social_event\Entity;
 
-use Drupal\Core\Entity\EntityStorageInterface;
-use Drupal\Core\Field\BaseFieldDefinition;
+use Drupal\Core\Cache\Cache;
 use Drupal\Core\Entity\ContentEntityBase;
 use Drupal\Core\Entity\EntityChangedTrait;
+use Drupal\Core\Entity\EntityStorageInterface;
 use Drupal\Core\Entity\EntityTypeInterface;
+use Drupal\Core\Field\BaseFieldDefinition;
+use Drupal\node\NodeInterface;
 use Drupal\social_event\EventEnrollmentInterface;
 use Drupal\user\UserInterface;
-use Drupal\Core\Cache\Cache;
-use Drupal\node\NodeInterface;
 
 /**
  * Defines the Event enrollment entity.
@@ -109,6 +109,27 @@ class EventEnrollment extends ContentEntityBase implements EventEnrollmentInterf
   /**
    * {@inheritdoc}
    */
+  public function label() {
+    // When a guest is allowed to join the name and account fields can be empty,
+    // but the field for email will be provided.
+    // The first and last name are not mandatory,
+    // so the field_name is used for validation instead.
+    if ($this->hasField('field_email') && !$this->get('field_email')->isEmpty()) {
+      $label = trim(sprintf('%s %s', $this->get('field_first_name')->value, $this->get('field_last_name')->value));
+      return empty($label) ? $this->get('field_email')->value : $label;
+    }
+
+    $label = $this->getName();
+    if (empty($label)) {
+      $label = $this->get('field_account')->entity->label();
+    }
+
+    return $label;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
   public function setName($name) {
     $this->set('name', $name);
     return $this;
@@ -146,8 +167,19 @@ class EventEnrollment extends ContentEntityBase implements EventEnrollmentInterf
   /**
    * {@inheritdoc}
    */
-  public function getAccount() {
+  public function getAccount(): ?string {
     return $this->get('field_account')->target_id;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function getAccountEntity(): ?UserInterface {
+    if ($this->get('field_account')->isEmpty()) {
+      return NULL;
+    }
+
+    return $this->get('field_account')->entity;
   }
 
   /**
@@ -164,6 +196,27 @@ class EventEnrollment extends ContentEntityBase implements EventEnrollmentInterf
   public function setOwner(UserInterface $account) {
     $this->set('user_id', $account->id());
     return $this;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function getEvent(): ?NodeInterface {
+    /** @var \Drupal\node\NodeInterface $node */
+    $node = $this->get('field_event')->entity;
+    return $node;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function getEventStandaloneEnrollConfirmationStatus(): bool {
+    $event = $this->getEvent();
+    if ($event instanceof NodeInterface) {
+      return (bool) $event->get('field_event_send_confirmation')->getString();
+    }
+
+    return FALSE;
   }
 
   /**

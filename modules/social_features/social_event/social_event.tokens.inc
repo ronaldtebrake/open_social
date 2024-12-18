@@ -10,6 +10,7 @@ use Drupal\Core\StringTranslation\TranslatableMarkup;
 use Drupal\Core\Link;
 use Drupal\Core\Url;
 use Drupal\message\Entity\Message;
+use Drupal\node\NodeInterface;
 use Drupal\social_event\EventEnrollmentInterface;
 
 /**
@@ -37,6 +38,11 @@ function social_event_token_info() {
     'description' => t('Url of the Event a user enrolled to.'),
   ];
 
+  $social_event['enrolled_users_count'] = [
+    'name' => t('Enrolled users count'),
+    'description' => t('The total count of enrolled users to the current event.'),
+  ];
+
   return [
     'types' => ['social_event' => $type],
     'tokens' => [
@@ -50,6 +56,36 @@ function social_event_token_info() {
  */
 function social_event_tokens($type, $tokens, array $data, array $options, BubbleableMetadata $bubbleable_metadata) {
   $replacements = [];
+  if ($type === 'social_event') {
+    foreach ($tokens as $name => $original) {
+      switch ($name) {
+        case 'enrolled_users_count':
+          $nid = Drupal::routeMatch()->getRawParameter('node');
+          if ($nid) {
+            $node = \Drupal::entityTypeManager()
+              ->getStorage('node')
+              ->load($nid);
+            if ($node instanceof NodeInterface && $node->getType() === 'event') {
+              $enrollments = \Drupal::service('social_event.status_helper');
+              $count = count($enrollments->getEventEnrollmentsByStatus((int) $node->id(), [
+                EventEnrollmentInterface::INVITE_ACCEPTED_AND_JOINED,
+                EventEnrollmentInterface::REQUEST_APPROVED,
+              ], TRUE));
+              $enrollments = \Drupal::translation()->formatPlural(
+                $count,
+                ':count person has enrolled',
+                ':count people have enrolled',
+                [':count' => $count]
+              );
+              if ($count !== NULL) {
+                $replacements[$original] = $enrollments;
+              }
+            }
+          }
+          break;
+      }
+    }
+  }
   if ($type === 'social_event' && !empty($data['message'])) {
     /** @var Drupal\message\Entity\Message $message */
     $message = $data['message'];
@@ -99,6 +135,11 @@ function social_event_tokens($type, $tokens, array $data, array $options, Bubble
  */
 function social_event_tokens_alter(array &$replacements, array $context, BubbleableMetadata $bubbleable_metadata) {
   if ($context['type'] == 'message' && !empty($context['data']['message'])) {
+    // Translate hook_tokens options to the options for TranslatableMarkup.
+    $translation_options = [
+      'langcode' => $context['options']['langcode'] ?? NULL,
+    ];
+
     /** @var Drupal\message\Entity\Message $message */
     $message = $context['data']['message'];
 
@@ -119,25 +160,33 @@ function social_event_tokens_alter(array &$replacements, array $context, Bubblea
               switch ($message_template_id) {
                 case 'activity_on_events_im_organizing':
                   $link = Url::fromRoute('view.event_manage_enrollments.page_manage_enrollments', ['node' => $event->id()]);
-                  $cta_button = $email_token_services->getCtaButton($link, new TranslatableMarkup('View enrollments'));
+                  $cta_button = $email_token_services->getCtaButton($link, new TranslatableMarkup('View enrollments', [], $translation_options));
                   $replacements[$context['tokens']['cta_button']] = \Drupal::service('renderer')
-                    ->renderPlain($cta_button);
+                    ->renderInIsolation($cta_button);
                   break;
 
                 case 'request_event_enrollment':
                   $link = Url::fromRoute('view.event_manage_enrollment_requests.page_manage_enrollment_requests', ['node' => $event->id()]);
-                  $cta_button = $email_token_services->getCtaButton($link, new TranslatableMarkup('View enrollment requests'));
+                  $cta_button = $email_token_services->getCtaButton($link, new TranslatableMarkup('View enrollment requests', [], $translation_options));
                   $replacements[$context['tokens']['cta_button']] = \Drupal::service('renderer')
-                    ->renderPlain($cta_button);
+                    ->renderInIsolation($cta_button);
                   break;
 
                 case 'member_added_by_event_organiser':
                 case 'event_request_approved':
                   $link = $event->toUrl('canonical');
-                  $cta_button = $email_token_services->getCtaButton($link, new TranslatableMarkup('See the event'));
+                  $cta_button = $email_token_services->getCtaButton($link, new TranslatableMarkup('See the event', [], $translation_options));
                   $replacements[$context['tokens']['cta_button']] = \Drupal::service('renderer')
-                    ->renderPlain($cta_button);
+                    ->renderInIsolation($cta_button);
                   break;
+
+                case 'user_was_enrolled_to_event':
+                  $link = $event->toUrl();
+                  $cta_button = $email_token_services->getCtaButton($link, new TranslatableMarkup('See event details', [], $translation_options));
+                  $replacements[$context['tokens']['cta_button']] = \Drupal::service('renderer')
+                    ->renderInIsolation($cta_button);
+                  break;
+
               }
             }
           }
@@ -146,9 +195,11 @@ function social_event_tokens_alter(array &$replacements, array $context, Bubblea
             $event = _social_event_get_event_from_enrollment($event_enrollment_id);
             if ($event !== NULL) {
               /** @var \Drupal\node\Entity\Node $event */
-              $preview_info = $email_token_services->getContentPreview($event);
-              $replacements[$context['tokens']['preview']] = \Drupal::service('renderer')
-                ->renderPlain($preview_info);
+              $view_builder = \Drupal::entityTypeManager()->getViewBuilder('node');
+              $preview_info = $view_builder->view($event, 'email_card');
+              $renderer = \Drupal::service('renderer');
+              $renderer->addCacheableDependency($preview_info, $translation_options);
+              $replacements[$context['tokens']['preview']] = $renderer->renderInIsolation($preview_info);
             }
           }
         }
@@ -174,7 +225,8 @@ function social_event_tokens_alter(array &$replacements, array $context, Bubblea
  */
 function _social_event_get_link_to_event_from_enrollment(int $event_enrollment_id, bool $as_link = FALSE) {
   // Check if the event still exists.
-  if ($event = _social_event_get_event_from_enrollment($event_enrollment_id)) {
+  $event = _social_event_get_event_from_enrollment($event_enrollment_id);
+  if ($event && !is_null($event->getTitle())) {
     if ($as_link) {
       $url_string = $event->toUrl('canonical')->toString(TRUE);
       return $url_string->getGeneratedUrl();

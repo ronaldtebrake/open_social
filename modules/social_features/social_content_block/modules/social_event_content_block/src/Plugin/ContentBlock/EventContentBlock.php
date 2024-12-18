@@ -82,7 +82,7 @@ class EventContentBlock extends ContentBlockBase implements ContainerFactoryPlug
           break;
 
         case 'field_event_group':
-          $query->innerJoin('group_content_field_data', 'gc', 'gc.entity_id = base_table.nid');
+          $query->innerJoin('group_relationship_field_data', 'gc', 'gc.entity_id = base_table.nid');
           $query->condition('gc.type', '%' . $query->escapeLike('-group_node-event'), 'LIKE');
           $query->condition('gc.gid', $field_value, 'IN');
           break;
@@ -124,6 +124,17 @@ class EventContentBlock extends ContentBlockBase implements ContainerFactoryPlug
               $range['end'] = new \DateTime();
               $end_operator = '>';
               $query->condition('nfed.field_event_date_value', (new \DateTime())->format(DateTimeItemInterface::DATETIME_STORAGE_FORMAT), '<');
+              break;
+
+            case 'future_ongoing':
+              $range['start'] = new \DateTime('-30 days');
+
+              $query->leftJoin('node__field_event_date_end', 'nfede', "nfede.entity_id = base_table.nid AND nfede.bundle = 'event'");
+              $or = $query->orConditionGroup();
+              $or->condition('nfede.field_event_date_end_value', (new \DateTime())->format(DateTimeItemInterface::DATETIME_STORAGE_FORMAT), '>');
+              $or->isNull('nfede.entity_id');
+
+              $query->condition($or);
               break;
 
             case 'last_30':

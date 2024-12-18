@@ -6,12 +6,14 @@
  */
 
 use Drupal\comment\CommentInterface;
+use Drupal\Core\Entity\ContentEntityBase;
 use Drupal\Core\Render\BubbleableMetadata;
 use Drupal\Core\StringTranslation\TranslatableMarkup;
 use Drupal\mentions\Entity\Mentions;
 use Drupal\message\Entity\Message;
 use Drupal\user\Entity\User;
 use Drupal\Core\Render\Markup;
+use Drupal\social_post\Entity\Post;
 
 /**
  * Implements hook_token_info().
@@ -95,7 +97,7 @@ function social_mentions_tokens($type, $tokens, array $data, array $options, Bub
                   ->getStorage($target_type)
                   ->load($target_id);
 
-                if ($mention->getEntityTypeId() == 'mentions') {
+                if ($mention->getEntityTypeId() === 'mentions') {
                   $loadUserId = User::load($mention->getMentionedUserID());
                   $user = $loadUserId->getDisplayName();
 
@@ -107,6 +109,7 @@ function social_mentions_tokens($type, $tokens, array $data, array $options, Bub
             break;
 
           case 'commented_entity_link_html':
+          case 'commented_entity_link_html:capitalized':
 
             if (!$message->get('field_message_related_object')->isEmpty()) {
               $target_type = $message->getFieldValue('field_message_related_object', 'target_type');
@@ -117,7 +120,7 @@ function social_mentions_tokens($type, $tokens, array $data, array $options, Bub
                 ->load($target_id);
 
               if ($mention instanceof Mentions && $mentioned_entity = $mention->getMentionedEntity()) {
-                if ($mentioned_entity->getEntityTypeId() === 'comment') {
+                if ($mentioned_entity->getEntityTypeId() === 'comment' && $mentioned_entity instanceof CommentInterface) {
                   $entity = $mentioned_entity->getCommentedEntity();
                 }
                 else {
@@ -130,10 +133,11 @@ function social_mentions_tokens($type, $tokens, array $data, array $options, Bub
               switch ($entity->getEntityTypeId()) {
                 case 'node':
                   // Then get the bundle name.
-                  $content_type_label = mb_strtolower(\Drupal::entityTypeManager()
-                    ->getStorage('node_type')
-                    ->load($entity->bundle())
-                    ->label());
+                  $content_type_label = '';
+                  $label = \Drupal::entityTypeManager()->getStorage('node_type')->load($entity->bundle())->label();
+                  if (is_string($label) || $label instanceof TranslatableMarkup) {
+                    $content_type_label = mb_strtolower($label);
+                  }
                   break;
 
                 case 'post':
@@ -141,7 +145,10 @@ function social_mentions_tokens($type, $tokens, array $data, array $options, Bub
                 case 'comment':
                   $content_type_label = mb_strtolower($entity->getEntityType()->getLabel());
                   break;
+              }
 
+              if (isset($content_type_label) && str_ends_with($name, ':capitalized')) {
+                $content_type_label = ucfirst($content_type_label);
               }
 
               $url_options = ['absolute' => TRUE];
@@ -172,6 +179,11 @@ function social_mentions_tokens($type, $tokens, array $data, array $options, Bub
  */
 function social_mentions_tokens_alter(array &$replacements, array $context, BubbleableMetadata $bubbleable_metadata) {
   if ($context['type'] == 'message' && !empty($context['data']['message'])) {
+    // Translate hook_tokens options to the options for TranslatableMarkup.
+    $translation_options = [
+      'langcode' => $context['options']['langcode'] ?? NULL,
+    ];
+
     /** @var Drupal\message\Entity\Message $message */
     $message = $context['data']['message'];
 
@@ -219,7 +231,7 @@ function social_mentions_tokens_alter(array &$replacements, array $context, Bubb
 
               // Get the comment entity.
               $comment = NULL;
-              if ($comment_field_name && $entity->hasField($comment_field_name)) {
+              if ($comment_field_name && $entity instanceof ContentEntityBase && $entity->hasField($comment_field_name)) {
                 $comment_id = $entity->getFieldValue($comment_field_name, 'cid');
                 if ($comment_id) {
                   /** @var Drupal\comment\Entity\Comment $comment */
@@ -237,9 +249,9 @@ function social_mentions_tokens_alter(array &$replacements, array $context, Bubb
                 }
 
                 $link = $entity->toUrl('canonical', $options);
-                $cta_button = $email_token_services->getCtaButton($link, new TranslatableMarkup('Reply to this comment'));
+                $cta_button = $email_token_services->getCtaButton($link, new TranslatableMarkup('Reply to this comment', [], $translation_options));
                 $replacements[$context['tokens']['cta_button']] = \Drupal::service('renderer')
-                  ->renderPlain($cta_button);
+                  ->renderInIsolation($cta_button);
               }
 
               // Prepare the comment preview.
@@ -260,11 +272,13 @@ function social_mentions_tokens_alter(array &$replacements, array $context, Bubb
                   case 'post':
                   case 'photo':
                     // Get the summary of the post.
-                    $preview_info = $email_token_services->getPostPreview($entity);
+                    if ($entity instanceof Post) {
+                      $preview_info = $email_token_services->getPostPreview($entity);
+                    }
                     break;
                 }
                 $replacements[$context['tokens']['preview']] = \Drupal::service('renderer')
-                  ->renderPlain($preview_info);
+                  ->renderInIsolation($preview_info);
               }
             }
             break;

@@ -65,7 +65,7 @@ class EventRequestEnrollmentNotification extends BlockBase implements ContainerF
   protected $loggerFactory;
 
   /**
-   * Constructs SocialGroupRequestMembershipNotification.
+   * Constructs EventRequestEnrollmentNotification.
    *
    * @param array $configuration
    *   Configuration array.
@@ -134,6 +134,7 @@ class EventRequestEnrollmentNotification extends BlockBase implements ContainerF
         ->condition('field_event.target_id', $this->event->id())
         ->condition('field_request_or_invite_status.value', EventEnrollmentInterface::REQUEST_PENDING)
         ->condition('field_enrollment_status.value', '0')
+        ->accessCheck()
         ->count()
         ->execute();
 

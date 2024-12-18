@@ -1,25 +1,26 @@
 name: Social
 type: profile
 description: 'Open Social distribution profile.'
-core_version_requirement: ^9
-version: '11.0.0-rc1'
+core_version_requirement: ^9 || ^10
+version: '13.0.0-alpha21'
 project: social
 
 # Dependencies that Open Social can not live without.
 dependencies:
   # core
   - drupal:breakpoint
-  - drupal:color
   - drupal:config
+  - drupal:mysql
   - drupal:node
   - drupal:user
   - drupal:views
   # Contrib
+  - color:color
   - improved_theme_settings:improved_theme_settings
   # Open Social
+  - social:social_group
   - social:social_activity
   - social:social_core
-  - social:social_group
   - social:social_swiftmail
   - social:social_user
 
@@ -47,6 +48,7 @@ install:
   - social:social_group_request
   - social:social_event_invite
   - social:social_advanced_queue
+  - social:social_emoji
   # Contrib
   - ultimate_cron:ultimate_cron
 

@@ -52,30 +52,34 @@ class SocialGroupRequestConfigOverride implements ConfigFactoryOverrideInterface
   public function loadOverrides($names) {
     $overrides = [];
 
-    foreach ($names as $name) {
-      if (strpos($name, 'block.block.') === 0) {
-        $config = $this->configFactory->getEditable($name);
+    $config_names = [
+      'block.block.socialblue_local_tasks',
+      'block.block.socialbase_local_tasks',
+    ];
 
-        if ($config->get('settings.id') == 'local_tasks_block') {
-          $visibility_paths = $config->get('visibility');
-          if (isset($visibility_paths['request_path']['pages'])) {
-            $overrides[$name] = [
-              'visibility' => [
-                'request_path' => [
-                  'pages' => $visibility_paths['request_path']['pages'] . "\r\n/group/*/membership-requests",
-                ],
+    // We only care about our own local tasks,
+    // other implementations have the Block UI.
+    // Also since it's an optional block, coming from social_core with a
+    // dependency on the theme, we can't do this on hook_install as we don't
+    // know when social_group_request will be installed and if the block already
+    // exists by then.
+    foreach ($config_names as $config_name) {
+      if (in_array($config_name, $names)) {
+        $config = $this->configFactory->getEditable($config_name);
+        $visibility_paths = $config->get('visibility');
+        if (isset($visibility_paths['request_path']['pages'])) {
+          $overrides[$config_name] = [
+            'visibility' => [
+              'request_path' => [
+                'pages' => $visibility_paths['request_path']['pages'] . "\r\n/group/*/membership-requests",
               ],
-            ];
-          }
+            ],
+          ];
         }
       }
     }
 
-    $social_group_types = [
-      'open_group',
-      'closed_group',
-      'public_group',
-    ];
+    $social_group_types = [];
 
     $this->moduleHandler->alter('social_group_types', $social_group_types);
 
@@ -83,19 +87,6 @@ class SocialGroupRequestConfigOverride implements ConfigFactoryOverrideInterface
     $outsider_role_configs = [];
     foreach ($social_group_types as $social_group_type) {
       $default_form_display_configs[] = "core.entity_form_display.group.{$social_group_type}.default";
-      $outsider_role_configs[] = "group.role.{$social_group_type}-outsider";
-    }
-
-    foreach ($outsider_role_configs as $config_name) {
-      if (in_array($config_name, $names)) {
-        $config = $this->configFactory->getEditable($config_name);
-        $permissions = $config->get('permissions');
-        $permissions[] = 'request group membership';
-
-        $overrides[$config_name] = [
-          'permissions' => $permissions,
-        ];
-      }
     }
 
     foreach ($default_form_display_configs as $config_name) {
@@ -122,15 +113,6 @@ class SocialGroupRequestConfigOverride implements ConfigFactoryOverrideInterface
           ],
         ];
       }
-    }
-
-    $config_name = 'field.storage.group.field_group_allowed_join_method';
-    if (in_array($config_name, $names)) {
-      $overrides[$config_name] = [
-        'settings' => [
-          'allowed_values_function' => 'social_group_request_allowed_join_method_values',
-        ],
-      ];
     }
 
     $config_name = 'views.view.group_pending_members';
@@ -230,7 +212,7 @@ class SocialGroupRequestConfigOverride implements ConfigFactoryOverrideInterface
             'position' => 2,
             'display_options' => [
               'display_extenders' => [],
-              'path' => 'group/%/membership-requests',
+              'path' => 'group/%group/membership-requests',
               'access' => [
                 'type' => 'role',
                 'options' => [
@@ -376,7 +358,7 @@ class SocialGroupRequestConfigOverride implements ConfigFactoryOverrideInterface
                 ],
                 'created' => [
                   'id' => 'created',
-                  'table' => 'group_content_field_data',
+                  'table' => 'group_relationship_field_data',
                   'field' => 'created',
                   'relationship' => 'none',
                   'group_type' => 'group',
@@ -446,7 +428,7 @@ class SocialGroupRequestConfigOverride implements ConfigFactoryOverrideInterface
                 ],
                 'gid' => [
                   'id' => 'gid',
-                  'table' => 'group_content_field_data',
+                  'table' => 'group_relationship_field_data',
                   'field' => 'gid',
                   'relationship' => 'none',
                   'group_type' => 'group',
@@ -512,7 +494,7 @@ class SocialGroupRequestConfigOverride implements ConfigFactoryOverrideInterface
                 ],
                 'id' => [
                   'id' => 'id',
-                  'table' => 'group_content_field_data',
+                  'table' => 'group_relationship_field_data',
                   'field' => 'id',
                   'relationship' => 'none',
                   'group_type' => 'group',

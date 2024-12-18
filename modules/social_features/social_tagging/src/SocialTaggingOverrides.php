@@ -5,8 +5,10 @@ namespace Drupal\social_tagging;
 use Drupal\Core\Cache\CacheableMetadata;
 use Drupal\Core\Config\ConfigFactoryOverrideInterface;
 use Drupal\Core\Config\ConfigFactoryInterface;
+use Drupal\Core\Config\StorableConfigBase;
 use Drupal\Core\Config\StorageInterface;
 use Drupal\Core\StringTranslation\StringTranslationTrait;
+use Drupal\social_core\Service\MachineNameInterface;
 
 /**
  * Configuration override.
@@ -17,19 +19,28 @@ class SocialTaggingOverrides implements ConfigFactoryOverrideInterface {
 
   /**
    * The config factory.
-   *
-   * @var \Drupal\Core\Config\ConfigFactoryInterface
    */
-  protected $configFactory;
+  protected ConfigFactoryInterface $configFactory;
+
+  /**
+   * The machine name.
+   */
+  private MachineNameInterface $machineName;
 
   /**
    * Constructs the service.
    *
    * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
    *   The config factory.
+   * @param \Drupal\social_core\Service\MachineNameInterface $machine_name
+   *   The machine name.
    */
-  public function __construct(ConfigFactoryInterface $config_factory) {
+  public function __construct(
+    ConfigFactoryInterface $config_factory,
+    MachineNameInterface $machine_name
+  ) {
     $this->configFactory = $config_factory;
+    $this->machineName = $machine_name;
   }
 
   /**
@@ -40,11 +51,8 @@ class SocialTaggingOverrides implements ConfigFactoryOverrideInterface {
    *
    * @param array $names
    *   The names of the configs for which overrides are being loaded.
-   *
-   * @return bool
-   *   Whether we override those configs.
    */
-  private function shouldApplyOverrides(array $names) {
+  private function shouldApplyOverrides(array $names): bool {
     $config_names = [
       'views.view.search_content',
       'views.view.search_groups',
@@ -58,6 +66,7 @@ class SocialTaggingOverrides implements ConfigFactoryOverrideInterface {
       'views.view.events',
       'views.view.group_topics',
       'views.view.group_events',
+      'views.view.group_books',
       'views.view.newest_groups',
       'views.view.newest_users',
       'core.entity_view_display.profile.profile.default',
@@ -87,6 +96,7 @@ class SocialTaggingOverrides implements ConfigFactoryOverrideInterface {
 
     /** @var \Drupal\social_tagging\SocialTaggingService $tag_service */
     $tag_service = \Drupal::service('social_tagging.tag_service');
+
     $config = $this->configFactory;
 
     // Check if tagging is active.
@@ -95,7 +105,7 @@ class SocialTaggingOverrides implements ConfigFactoryOverrideInterface {
     }
 
     // Remove tagging field from search index if not needed.
-    if (!$tag_service->groupActive()) {
+    if (!$tag_service->groupsActive()) {
       $field_settings = $config
         ->getEditable('search_api.index.social_groups')
         ->get('field_settings');
@@ -126,14 +136,14 @@ class SocialTaggingOverrides implements ConfigFactoryOverrideInterface {
       foreach ($tag_service->getCategories() as $tid => $value) {
         if (!empty($tag_service->getChildren($tid))) {
           $fields['social_tagging_' . $tid] = [
-            'identifier' => social_tagging_to_machine_name($value),
+            'identifier' => $this->machineName->transform($value),
             'label' => $value,
           ];
         }
         // Display parent of tags.
         elseif ($tag_service->useCategoryParent()) {
           $fields['social_tagging_' . $tid] = [
-            'identifier' => social_tagging_to_machine_name($value),
+            'identifier' => $this->machineName->transform($value),
             'label' => $value,
           ];
         }
@@ -144,7 +154,7 @@ class SocialTaggingOverrides implements ConfigFactoryOverrideInterface {
     $config_views = [
       'views.view.search_content' => 'search_api_index_social_content',
     ];
-    if ($tag_service->groupActive()) {
+    if ($tag_service->groupsActive()) {
       $config_views['views.view.search_groups'] = 'search_api_index_social_groups';
     }
     if ($tag_service->profileActive()) {
@@ -237,7 +247,7 @@ class SocialTaggingOverrides implements ConfigFactoryOverrideInterface {
       foreach ($tag_service->getCategories() as $tid => $value) {
         if (!empty($tag_service->getChildren($tid))) {
           $fields['social_tagging_target_id_' . $tid] = [
-            'identifier' => social_tagging_to_machine_name($value),
+            'identifier' => $this->machineName->transform($value),
             'label' => $value,
           ];
         }
@@ -252,11 +262,12 @@ class SocialTaggingOverrides implements ConfigFactoryOverrideInterface {
       'views.view.events' => 'events_overview',
       'views.view.group_topics' => 'default',
       'views.view.group_events' => 'default',
+      'views.view.group_books' => 'default',
       'views.view.newest_groups' => 'page_all_groups',
     ];
 
     if ($tag_service->profileActive()) {
-      $config_overviews['views.view.newest_users'] = 'default';
+      $config_overviews['views.view.newest_users'] = 'page_newest_users';
     }
 
     foreach ($config_overviews as $config_name => $display) {
@@ -273,7 +284,9 @@ class SocialTaggingOverrides implements ConfigFactoryOverrideInterface {
           $group++;
         }
 
-        $relationship = ($config_name === 'views.view.group_topics' || $config_name === 'views.view.group_events') ? 'gc__node' : 'none';
+        $relationship = in_array($config_name, ['views.view.group_topics', 'views.view.group_events', 'views.view.group_books'])
+          ? 'gc__node'
+          : 'none';
 
         // Select the correct table, based on the config.
         switch ($config_name) {
@@ -418,7 +431,7 @@ class SocialTaggingOverrides implements ConfigFactoryOverrideInterface {
   /**
    * {@inheritdoc}
    */
-  public function createConfigObject($name, $collection = StorageInterface::DEFAULT_COLLECTION) {
+  public function createConfigObject($name, $collection = StorageInterface::DEFAULT_COLLECTION): ?StorableConfigBase {
     return NULL;
   }
 

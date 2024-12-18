@@ -7,6 +7,7 @@ use Drupal\activity_creator\Plugin\ActivityDestinationManager;
 use Drupal\Component\Render\FormattableMarkup;
 use Drupal\Core\Controller\ControllerBase;
 use Drupal\Core\Database\Connection;
+use Drupal\Core\Entity\EntityInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\Core\Language\LanguageManagerInterface;
@@ -126,6 +127,16 @@ class ActivityFactory extends ControllerBase {
   protected function buildActivities(array $data) {
     $activities = [];
     $message = Message::load($data['mid']);
+    // Return early if message is empty.
+    if (empty($message)) {
+      return $activities;
+    }
+
+    // Validate before creating the activity.
+    if (!$this->validateActivities($message)) {
+      return $activities;
+    }
+
     // Initialize fields for new activity entity.
     $activity_fields = [
       'created' => $this->getCreated($message),
@@ -152,6 +163,42 @@ class ActivityFactory extends ControllerBase {
     }
 
     return $activities;
+  }
+
+  /**
+   * Create the activities based on a data array.
+   *
+   * @param \Drupal\message\Entity\Message $message
+   *   The message entity.
+   *
+   * @return bool
+   *   Decision to skip the activity creation.
+   */
+  protected function validateActivities(Message $message): bool {
+    // If we don't have a related object we don't need to check if it exists.
+    if (!$message->hasField('field_message_related_object') || $message->get('field_message_related_object')->isEmpty()) {
+      return TRUE;
+    }
+
+    $target_id = $message->getFieldValue('field_message_related_object', 'target_id');
+    $target_type = $message->getFieldValue('field_message_related_object', 'target_type');
+
+    // If we have a related object but no target values it means it's malformed,
+    // and we want to skip the activity creation.
+    if (empty($target_type) || empty($target_id)) {
+      return FALSE;
+    }
+
+    $entity = $this->entityTypeManager
+      ->getStorage($target_type)
+      ->load($target_id);
+
+    // If the related object doesn't exist anymore we don't need to process.
+    if (!$entity instanceof EntityInterface) {
+      return FALSE;
+    }
+
+    return TRUE;
   }
 
   /**
@@ -201,41 +248,31 @@ class ActivityFactory extends ControllerBase {
    * Get field value for 'output_text' field from data array.
    */
   protected function getFieldOutputText(Message $message, $arguments = []) {
-    $value = NULL;
-    if (isset($message)) {
+    $value = $this->getMessageText($message);
 
-      $value = $this->getMessageText($message);
-
-      // Text for aggregated activities.
-      if (!empty($value[1]) && !empty($arguments)) {
-        $text = str_replace('@count', $arguments['@count'], $value[1]);
-      }
-      // Text for default activities.
-      else {
-        $text = $value[0];
-      }
-
-      // Add format.
-      $value = [
-        '0' => [
-          'value' => $text,
-          'format' => 'basic_html',
-        ],
-      ];
+    // Text for aggregated activities.
+    if (!empty($value[1]) && !empty($arguments)) {
+      $text = str_replace('@count', $arguments['@count'], $value[1]);
+    }
+    // Text for default activities.
+    else {
+      $text = $value[0];
     }
 
-    return $value;
+    // Add format.
+    return [
+      '0' => [
+        'value' => $text,
+        'format' => 'basic_html',
+      ],
+    ];
   }
 
   /**
    * Get field value for 'created' field from data array.
    */
   protected function getCreated(Message $message) {
-    $value = NULL;
-    if (isset($message)) {
-      $value = $message->getCreatedTime();
-    }
-    return $value;
+    return $message->getCreatedTime();
   }
 
   /**
@@ -279,6 +316,11 @@ class ActivityFactory extends ControllerBase {
       // Update output text for activity on not user related streams.
       $arguments = [];
       $message = Message::load($data['mid']);
+      // Return early if message is empty.
+      if (empty($message)) {
+        return $activities;
+      }
+
       $count = $this->getAggregationAuthorsCount($data);
       if (is_numeric($count) && $count > 1) {
         $arguments = ['@count' => $count - 1];
@@ -311,12 +353,21 @@ class ActivityFactory extends ControllerBase {
         // Get commented entity.
         $comment_storage = $this->entityTypeManager->getStorage('comment');
         $comment = $comment_storage->load($related_object['target_id']);
-        $commented_entity = $comment->getCommentedEntity();
-        // Get all comments of commented entity.
-        $comment_query = $this->entityTypeManager->getStorage('comment')->getQuery();
-        $comment_query->condition('entity_id', $commented_entity->id(), '=');
-        $comment_query->condition('entity_type', $commented_entity->getEntityTypeId(), '=');
-        $comment_ids = $comment_query->execute();
+        // This can happen if the comment was removed before the activity was
+        // processed.
+        if ($comment === NULL) {
+          $comment_ids = NULL;
+        }
+        else {
+          $commented_entity = $comment->getCommentedEntity();
+          // Get all comments of commented entity.
+          $comment_query = $this->entityTypeManager->getStorage('comment')
+            ->getQuery();
+          $comment_query->condition('entity_id', $commented_entity->id(), '=');
+          $comment_query->condition('entity_type', $commented_entity->getEntityTypeId(), '=');
+          $comment_query->accessCheck();
+          $comment_ids = $comment_query->execute();
+        }
         // Get all activities provided by comments of commented entity.
         if (!empty($comment_ids)) {
           $activity_query = $this->entityTypeManager->getStorage('activity')->getQuery();
@@ -326,6 +377,7 @@ class ActivityFactory extends ControllerBase {
           // destinations from aggregation.
           $aggregatable_destinations = $this->activityDestinationManager->getListByProperties('isAggregatable', TRUE);
           $activity_query->condition('field_activity_destinations.value', $aggregatable_destinations, 'IN');
+          $activity_query->accessCheck();
           $activity_ids = $activity_query->execute();
           if (!empty($activity_ids)) {
             $activities = Activity::loadMultiple($activity_ids);
@@ -505,8 +557,63 @@ class ActivityFactory extends ControllerBase {
 
     $token_options = $message_template->getSetting('token options', []);
     if (!empty($token_options['token replace'])) {
+      $options = [
+        'langcode' => !empty($langcode) ? $langcode : '',
+        'clear' => !empty($token_options['clear']),
+      ];
       // Token should be processed.
-      $output = $this->processTokens($output, !empty($token_options['clear']), $message);
+      $output = $this->processTokens($output, $options, $message);
+    }
+
+    return $output;
+  }
+
+  /**
+   * Get message subject.
+   *
+   * @param \Drupal\message\Entity\Message $message
+   *   Message object we get the text for.
+   * @param string $langcode
+   *   The language code we try to get the translation for.
+   *
+   * @return array
+   *   Message subject array.
+   */
+  public function getMessageSubject(Message $message, $langcode = '') {
+    /** @var \Drupal\message\Entity\MessageTemplate $message_template */
+    $message_template = $message->getTemplate();
+
+    $message_arguments = $message->getArguments();
+
+    $settings = $message_template->getThirdPartySettings('activity_logger');
+    if (!isset($settings['email_subject'])) {
+      return [];
+    }
+
+    $subject = $settings['email_subject'];
+    // If we have a language code here we can try to get a translated subject.
+    if (!empty($langcode)) {
+      $language_manager = $this->languageManager;
+      if ($language_manager instanceof ConfigurableLanguageManagerInterface) {
+        // Load the language override for the message template.
+        $config_translation = $language_manager->getLanguageConfigOverride($langcode, 'message.template.' . $message_template->id());
+        $settings = $config_translation->get('third_party_settings');
+        if (isset($settings['activity_logger']['email_subject'])) {
+          $subject = $settings['activity_logger']['email_subject'];
+        }
+      }
+    }
+
+    $output = $this->processArguments($message_arguments, ['#markup' => $subject], $message);
+
+    $token_options = $message_template->getSetting('token options', []);
+    if (!empty($token_options['token replace'])) {
+      $options = [
+        'langcode' => !empty($langcode) ? $langcode : '',
+        'clear' => !empty($token_options['clear']),
+      ];
+      // Token should be processed.
+      $output = $this->processTokens($output, $options, $message);
     }
 
     return $output;
@@ -559,8 +666,16 @@ class ActivityFactory extends ControllerBase {
    *
    * @param array $output
    *   The templated text to be replaced.
-   * @param bool $clear
-   *   Determine if unused token should be cleared.
+   * @param array $options
+   *   A keyed array of settings and flags to control the token
+   *    replacement process. Supported options are:
+   *    - langcode: A language code to be used when generating locale-sensitive
+   *      tokens.
+   *    - callback: A callback function that will be used to post-process the
+   *      array of token replacements after they are generated.
+   *    - clear: A boolean flag indicating that tokens should be removed from
+   *      the final text if no replacement value can be generated.
+   *   This will be passed to \Drupal\Core\Utility\Token::replace().
    * @param \Drupal\message\Entity\Message $message
    *   Message object.
    *
@@ -568,11 +683,7 @@ class ActivityFactory extends ControllerBase {
    *   The output with placeholders replaced with the token value,
    *   if there are indeed tokens.
    */
-  protected function processTokens(array $output, $clear, Message $message) {
-    $options = [
-      'clear' => $clear,
-    ];
-
+  protected function processTokens(array $output, array $options, Message $message) {
     $bubbleable_metadata = new BubbleableMetadata();
     foreach ($output as $key => $value) {
       if (is_string($value)) {

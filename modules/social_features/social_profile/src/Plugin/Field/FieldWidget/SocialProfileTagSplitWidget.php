@@ -32,7 +32,7 @@ class SocialProfileTagSplitWidget extends Select2EntityReferenceWidget {
   /**
    * {@inheritdoc}
    */
-  public static function create(ContainerInterface $container, array $configuration, $plugin_id, $plugin_definition) {
+  public static function create(ContainerInterface $container, array $configuration, $plugin_id, $plugin_definition): self {
     $widget = parent::create($container, $configuration, $plugin_id, $plugin_definition);
     $widget->setSocialProfileTagService($container->get('social_profile.tag_service'));
     return $widget;
@@ -51,16 +51,19 @@ class SocialProfileTagSplitWidget extends Select2EntityReferenceWidget {
   /**
    * {@inheritdoc}
    */
-  public function formElement(FieldItemListInterface $items, $delta, array $element, array &$form, FormStateInterface $form_state) {
+  public function formElement(FieldItemListInterface $items, $delta, array $element, array &$form, FormStateInterface $form_state): array {
     $element = parent::formElement($items, $delta, $element, $form, $form_state);
 
     // Do not render field if no options or not active.
     if (
       !$this->profileTagService->isActive() ||
-      !$this->profileTagService->hasContent() ||
-      empty($element['#options'])
+      !$this->profileTagService->hasContent()
     ) {
       return [];
+    }
+
+    if (empty($element['#options'])) {
+      return $element;
     }
 
     // Only for fields related to taxonomy terms.
@@ -118,7 +121,7 @@ class SocialProfileTagSplitWidget extends Select2EntityReferenceWidget {
   /**
    * {@inheritdoc}
    */
-  public static function validateElement(array $element, FormStateInterface $form_state) {
+  public static function validateElement(array $element, FormStateInterface $form_state): void {
     /** @var \Drupal\social_profile\SocialProfileTagServiceInterface $profile_tag_service */
     $profile_tag_service = \Drupal::service('social_profile.tag_service');
     if ($profile_tag_service->allowSplit()) {

@@ -45,20 +45,27 @@ class SocialAlbumOptionsSelectWidget extends OptionsSelectWidget {
    */
   protected function getOptions(FieldableEntityInterface $entity) {
     $options = parent::getOptions($entity);
-    $option = $options['_none'];
-
-    unset($options['_none']);
-
-    // @todo FIX issues with options, if user selects an option
-    // we need to update the Post visibility accordingly with ajax.
-    // imagine a user on the home stream, selecting an existing album in a
-    // close group, the visibility needs to be updated to Group members, which
-    // it doesn't, so for now we're not rendering any other option.
-    // Return [...] + $options.
-    return [
-      '_none' => $option,
+    $empty_options = [
+      '_none' => $options['_none'],
       '_add' => $this->t('Create new album'),
     ];
+    $default_value = $entity->get('field_album')->target_id;
+    if ($entity->isNew() || !isset($options[$default_value])) {
+      $new_options = [
+        '_none' => $empty_options['_none'],
+      ];
+
+      // Existing albums.
+      foreach ($options as $key => $value) {
+        $new_options[$key] = $value;
+      }
+
+      $new_options['_add'] = $empty_options['_add'];
+
+      return $new_options;
+    }
+    // Return only default (previously saved album) and helper options.
+    return $empty_options + [$default_value => $options[$default_value]];
   }
 
   /**
@@ -127,6 +134,14 @@ class SocialAlbumOptionsSelectWidget extends OptionsSelectWidget {
       }
       else {
         $element['#value'] = '_none';
+      }
+    }
+    elseif ($element['#value'] !== '_none' && $has_images) {
+      /** @var \Drupal\node\NodeInterface|null $node */
+      $node = \Drupal::entityTypeManager()->getStorage('node')->load($element['#value']);
+      if ($node) {
+        $element['#value'] = $node->id();
+        $form_state->set('album', TRUE);
       }
     }
     elseif ($element['#value'] !== '_none' && !$has_images) {

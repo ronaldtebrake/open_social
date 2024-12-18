@@ -5,6 +5,7 @@ namespace Drupal\social_group;
 use Drupal\Core\Database\Connection;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Extension\ModuleHandlerInterface;
+use Drupal\Core\Render\RendererInterface;
 use Drupal\Core\Session\AccountInterface;
 use Drupal\Core\StringTranslation\TranslationInterface;
 
@@ -26,41 +27,42 @@ interface SocialGroupHelperServiceInterface {
    *   The string translation service.
    * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
    *   The entity type manager.
+   * @param \Drupal\Core\Render\RendererInterface $renderer
+   *   The renderer.
    */
   public function __construct(
     Connection $connection,
     ModuleHandlerInterface $module_handler,
     TranslationInterface $translation,
-    EntityTypeManagerInterface $entity_type_manager
+    EntityTypeManagerInterface $entity_type_manager,
+    RendererInterface $renderer
   );
+
+  /**
+   * Gets a description as HTML markup for the selected visibility option.
+   *
+   * @param string $key
+   *   The visibility option name.
+   * @param string $hook
+   *   The name of hook for altering description.
+   */
+  public function description(string $key, string $hook): string;
 
   /**
    * Returns a group id from a entity (post, node).
    *
+   * The group that this entity belongs to or NULL if the entity doesn't belong
+   * to any group.
+   *
    * @param array $entity
    *   The entity in the form of an entity reference array to get the group for.
    * @param bool $read_cache
-   *   Whether the per-request cache should be used. This should only be
-   *   disabled if you know that the group for the entity has changed because
+   *   (optional) Whether the per-request cache should be used. This should only
+   *   be disabled if you know that the group for the entity has changed because
    *   disabling this can have serious performance implications. Setting this to
-   *   FALSE will update the cache for subsequent calls.
-   *
-   * @return \Drupal\group\Entity\GroupInterface|null
-   *   The group that this entity belongs to or NULL if the entity doesn't
-   *   belong to any group.
+   *   FALSE will update the cache for subsequent calls. Defaults to TRUE.
    */
-  public function getGroupFromEntity(array $entity, bool $read_cache = TRUE);
-
-  /**
-   * Returns the default visibility.
-   *
-   * @param string $type
-   *   The Group Type.
-   *
-   * @return string|null
-   *   The default visibility.
-   */
-  public static function getDefaultGroupVisibility(string $type);
+  public function getGroupFromEntity(array $entity, bool $read_cache = TRUE): ?int;
 
   /**
    * Returns the statically cached group members form the current group.
@@ -103,15 +105,16 @@ interface SocialGroupHelperServiceInterface {
    *
    * @return \Drupal\Core\Url|null
    *   URL of the group add page.
+   *
+   * @deprecated Use the default route with 'flexible_group' as param directly.
+   *
+   * @see https://www.drupal.org/node/3420070
    */
   public function getGroupsToAddUrl(AccountInterface $account);
 
   /**
    * Provides a field for potential members.
-   *
-   * @return array
-   *   The renderable field.
    */
-  public function addMemberFormField();
+  public function addMemberFormField(): array;
 
 }

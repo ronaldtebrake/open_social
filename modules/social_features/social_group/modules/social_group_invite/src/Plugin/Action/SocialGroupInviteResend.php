@@ -20,7 +20,7 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
  *
  * @Action(
  *   id = "social_group_invite_resend_action",
- *   label = @Translation("Resend invites for group members"),
+ *   label = @Translation("Send reminders"),
  *   type = "group_content",
  *   confirm = TRUE,
  * )
@@ -88,10 +88,15 @@ class SocialGroupInviteResend extends ViewsBulkOperationsActionBase implements C
    * @throws \Drupal\Core\Entity\EntityStorageException
    */
   public function execute($entity = NULL): void {
+    $is_member = $entity->getGroup()->getMember($entity->getEntity());
+    if (is_object($is_member)) {
+      return;
+    }
+
     // This action allows to resend invitations for each member.
     $time = $this->time->getCurrentTime();
 
-    /** @var \Drupal\group\Entity\GroupContentInterface $entity */
+    /** @var \Drupal\group\Entity\GroupRelationshipInterface $entity */
     $duplicate = $entity->createDuplicate();
     // We can leave the "created" field value without changes.
     // But we want to "bring up" our resent invitation to the top of

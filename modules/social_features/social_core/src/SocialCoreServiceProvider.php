@@ -2,10 +2,9 @@
 
 namespace Drupal\social_core;
 
-use Drupal\Core\DependencyInjection\ServiceProviderBase;
 use Drupal\Core\DependencyInjection\ContainerBuilder;
-use Symfony\Component\DependencyInjection\Definition;
-use Drupal\social_core\Service\LayoutService;
+use Drupal\Core\DependencyInjection\ServiceProviderBase;
+use Drupal\social_eda_dispatcher\Dispatcher;
 
 /**
  * Class SocialCoreServiceProvider.
@@ -17,26 +16,30 @@ class SocialCoreServiceProvider extends ServiceProviderBase {
   /**
    * {@inheritdoc}
    */
-  public function alter(ContainerBuilder $container) {
+  public function alter(ContainerBuilder $container): void {
     // Overrides language_manager class to test domain language negotiation.
     $definition = $container->getDefinition('entity.autocomplete_matcher');
     $definition->setClass('Drupal\social_core\Entity\EntityAutocompleteMatcher');
 
-    $modules = $container->getParameter('container.modules');
-    // Check if select 2 is installed before we get the definition, otherwise
-    // you get a requested a non-existent service "select2.autocomplete_matcher
-    // on update hooks.
-    if (isset($modules['select2'])) {
-      $definition = $container->getDefinition('select2.autocomplete_matcher');
-      $definition->setClass('Drupal\social_core\Entity\Select2EntityAutocompleteMatcher');
+    if (is_array($modules = $container->getParameter('container.modules'))) {
+      // Check if select 2 is installed before we get the definition, otherwise
+      // you get a requested a non-existent service
+      // "select2.autocomplete_matcher" on update hooks.
+      if (isset($modules['select2'])) {
+        $definition = $container->getDefinition('select2.autocomplete_matcher');
+        $definition->setClass('Drupal\social_core\Entity\Select2EntityAutocompleteMatcher');
+      }
     }
 
-    // Check for installed layout_builder module.
-    if (isset($modules['layout_builder'])) {
-      // If it's installed we can register our service, using layout_builder
-      // classes to check whether entities enabled layout builder.
-      $service_definition = new Definition(LayoutService::class);
-      $container->setDefinition('social_core.layout', $service_definition);
+    // Replaces all EDA Handlers with dummies if there is no Publisher.
+    // In this case we expect the class not to be found because it exists
+    // outside the Open Social distribution.
+    // @phpstan-ignore class.notFound
+    if (!$container->hasDefinition(Dispatcher::class)) {
+      foreach ($container->findTaggedServiceIds('social.eda.handler') as $id => $attributes) {
+        $definition = $container->getDefinition($id);
+        $definition->setClass(EdaDummyHandler::class);
+      }
     }
   }
 

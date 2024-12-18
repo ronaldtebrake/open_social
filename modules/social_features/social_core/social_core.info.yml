@@ -1,19 +1,24 @@
 name: 'Social Core'
 description: 'Provides core components required by other features.'
 type: module
-core_version_requirement: ^9
+core_version_requirement: ^9 || ^10
 dependencies:
-  - admin_toolbar_tools:admin_toolbar_tools
+  - admin_toolbar:admin_toolbar
   - drupal:block
   - drupal:block_content
+  - config_modify:config_modify
   - crop:crop
   - drupal:field
   - field_group:field_group
   - drupal:file
   - drupal:image
+  - drupal:hux
   - redirect:redirect
   - image_effects:image_effects
   - image_widget_crop:image_widget_crop
+  - jquery_ui:jquery_ui
+  - jquery_ui_draggable:jquery_ui_draggable
+  - jquery_ui_resizable:jquery_ui_resizable
   - drupal:link
   - drupal:node
   - override_node_options:override_node_options
@@ -30,4 +35,5 @@ dependencies:
   - views_bulk_operations:views_bulk_operations
   - gin_toolbar:gin_toolbar
   - entity:entity
+  - social:secret_file_system
 package: Social

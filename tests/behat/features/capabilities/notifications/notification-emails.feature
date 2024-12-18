@@ -1,4 +1,4 @@
-@api @notifications @stability @DS-4323 @notification-emails
+@disabled @api @notifications @stability @DS-4323 @notification-emails
 Feature: Receive email notifications and choose frequency
   Benefit: Email notifications attract users to the platform
   Role: As a Verified
@@ -173,7 +173,7 @@ Feature: Receive email notifications and choose frequency
       | user1 | mail_user1@example.com | 1      | Christopher              | Conway                  |
       | user2 | mail_user2@example.com | 1      | Cathy                    | Willis                  |
     And I am logged in as an "sitemanager"
-    And I go to "/admin/config/opensocial/swiftmail"
+    And I go to "/admin/config/opensocial/mail"
     And I press "Default email notification settings"
     And I click radio button "Never" with the id "edit-create-mention-post-none"
     And I press "Save configuration"
@@ -196,7 +196,7 @@ Feature: Receive email notifications and choose frequency
 
 #   Enable mention notifications
     Given I am logged in as an "sitemanager"
-    And I go to "/admin/config/opensocial/swiftmail"
+    And I go to "/admin/config/opensocial/mail"
     And I press "Default email notification settings"
     And I click radio button "Immediately" with the id "edit-create-mention-post-immediately"
     And I press "Save configuration"

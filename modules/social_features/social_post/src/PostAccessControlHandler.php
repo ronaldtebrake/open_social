@@ -102,8 +102,8 @@ class PostAccessControlHandler extends EntityAccessControlHandler implements Ent
               // Check if the post has been posted in a group.
               $group_id = $entity->field_recipient_group->target_id;
 
+              $group = NULL;
               if ($group_id !== NULL) {
-                /** @var \Drupal\group\Entity\Group $group */
                 $group = \Drupal::service('entity_type.manager')->getStorage('group')->load($group_id);
               }
 
@@ -206,12 +206,6 @@ class PostAccessControlHandler extends EntityAccessControlHandler implements Ent
     $group = _social_group_get_current_group();
     if ($group instanceof GroupInterface) {
       if ($group->hasPermission('add post entities in group', $account)) {
-        if ($group->getGroupType()->id() === 'public_group') {
-          $config = \Drupal::config('entity_access_by_field.settings');
-          if ($config->get('disable_public_visibility') === 1 && !$account->hasPermission('override disabled public visibility')) {
-            return AccessResult::forbidden();
-          }
-        }
         return AccessResult::allowed();
       }
       else {

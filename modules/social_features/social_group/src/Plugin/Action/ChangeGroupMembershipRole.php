@@ -9,7 +9,7 @@ use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
 use Drupal\Core\Plugin\PluginFormInterface;
 use Drupal\Core\Routing\RouteMatchInterface;
 use Drupal\Core\Session\AccountInterface;
-use Drupal\group\Entity\GroupContentInterface;
+use Drupal\group\Entity\GroupRelationshipInterface;
 use Drupal\views_bulk_operations\Action\ViewsBulkOperationsActionBase;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 
@@ -26,11 +26,11 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
 class ChangeGroupMembershipRole extends ViewsBulkOperationsActionBase implements ContainerFactoryPluginInterface, PluginFormInterface {
 
   /**
-   * The group storage.
+   * The entity type manager service.
    *
-   * @var \Drupal\Core\Entity\EntityStorageInterface
+   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
    */
-  protected $storage;
+  protected EntityTypeManagerInterface $entityTypeManager;
 
   /**
    * The currently active route match object.
@@ -62,7 +62,7 @@ class ChangeGroupMembershipRole extends ViewsBulkOperationsActionBase implements
   ) {
     parent::__construct($configuration, $plugin_id, $plugin_definition);
 
-    $this->storage = $entity_type_manager->getStorage('group');
+    $this->entityTypeManager = $entity_type_manager;
     $this->routeMatch = $route_match;
   }
 
@@ -88,9 +88,11 @@ class ChangeGroupMembershipRole extends ViewsBulkOperationsActionBase implements
     $update = TRUE;
     $value = [];
 
-    /** @var \Drupal\group\Entity\GroupContentInterface $entity */
+    /** @var \Drupal\group\Entity\GroupRelationshipInterface $entity */
     /** @var \Drupal\Core\Field\EntityReferenceFieldItemListInterface $roles */
     $roles = &$entity->get('group_roles');
+
+    $group_manager_role = $entity->getGroup()->getGroupType()->id() . '-group_manager';
 
     if ($roles->isEmpty() && $is_member) {
       $update = FALSE;
@@ -100,6 +102,23 @@ class ChangeGroupMembershipRole extends ViewsBulkOperationsActionBase implements
 
       foreach ($value as $item) {
         if ($item['target_id'] === $role) {
+          if (array_search($item, $value) == 0) {
+            if ($role === $group_manager_role) {
+              // Set role 'Group Manager' only if user chosen 'Group Manager'.
+              $entity->set('group_roles', [0 => $item])->save();
+            }
+          }
+          else {
+            // Set role 'Group Manager' only if user chosen 'Group Manager'.
+            if ($role === $group_manager_role) {
+              $entity->set('group_roles', [0 => $item])->save();
+            }
+            // Add role 'Group Admin' if user chosen 'Group Admin'.
+            else {
+              $entity->set('group_roles', array_reverse($value))->save();
+            }
+          }
+
           $update = FALSE;
           break;
         }
@@ -108,7 +127,16 @@ class ChangeGroupMembershipRole extends ViewsBulkOperationsActionBase implements
 
     if ($update) {
       if (!$is_member) {
-        $value[] = ['target_id' => $role];
+        $new_value = ['target_id' => $role];
+
+        // Set role 'Group Manager' only if user chosen 'Group Manager'.
+        if ($role === $group_manager_role) {
+          $value = $new_value;
+        }
+        // Add role 'Group Admin' if user chosen 'Group Admin'.
+        else {
+          array_unshift($value, $new_value);
+        }
       }
 
       $entity->set('group_roles', $value)->save();
@@ -121,7 +149,7 @@ class ChangeGroupMembershipRole extends ViewsBulkOperationsActionBase implements
    * {@inheritdoc}
    */
   public function access($object, AccountInterface $account = NULL, $return_as_object = FALSE) {
-    if ($object instanceof GroupContentInterface && $object->getContentPlugin()->getPluginId() === 'group_membership') {
+    if ($object instanceof GroupRelationshipInterface && $object->getPluginId() === 'group_membership') {
       $access = $object->access('update', $account, TRUE);
     }
     else {
@@ -139,12 +167,18 @@ class ChangeGroupMembershipRole extends ViewsBulkOperationsActionBase implements
 
     $id = $this->routeMatch->getRawParameter('group');
 
+    /** @var \Drupal\group\Entity\GroupInterface $group */
+    $group = $this->entityTypeManager->getStorage('group')->load($id);
+
     /** @var \Drupal\group\Entity\GroupTypeInterface $group_type */
-    $group_type = $this->storage->load($id)->getGroupType();
+    $group_type = $group->getGroupType();
 
     $roles = $group_type->getRoles(FALSE);
-    $id = $group_type->getMemberRoleId();
-    $roles[$id] = $group_type->getMemberRole();
+
+    // In case that getMemberRoleId() and getMemberRole() have been removed
+    // try to load directly.
+    $id = $group_type->id() . '-member';
+    $roles[$id] = $this->entityTypeManager->getStorage('group_role')->load($id);
 
     $markup = $this->formatPlural($this->context['selected_count'],
       'Choose which group roles to assign to the member you selected',

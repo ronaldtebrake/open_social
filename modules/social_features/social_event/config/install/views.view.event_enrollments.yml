@@ -35,14 +35,14 @@ display:
         type: views_query
         options:
           disable_sql_rewrite: false
-          distinct: false
+          distinct: true
           replica: false
           query_comment: ''
           query_tags: {  }
       exposed_form:
         type: basic
         options:
-          submit_button: Apply
+          submit_button: Filter
           reset_button: false
           reset_button_label: Reset
           exposed_sorts_label: 'Sort by'
@@ -172,16 +172,17 @@ display:
       sorts: {  }
       title: Enrollments
       header:
-        result:
-          id: result
-          table: views
-          field: result
-          relationship: none
-          group_type: group
+        area_text_custom:
           admin_label: ''
+          content: '[social_event:enrolled_users_count]'
           empty: true
-          content: '@total people have enrolled'
-          plugin_id: result
+          field: area_text_custom
+          group_type: group
+          id: area_text_custom
+          plugin_id: text_custom
+          relationship: none
+          table: views
+          tokenize: false
       footer:
         area:
           id: area
@@ -308,20 +309,7 @@ display:
     display_options:
       display_extenders: {  }
       block_description: 'Enrollments Block'
-      footer:
-        area:
-          id: area
-          table: views
-          field: area
-          relationship: none
-          group_type: group
-          admin_label: ''
-          empty: false
-          tokenize: true
-          content:
-            value: '<a href="/node/{{ raw_arguments.nid }}/enrollments">See all enrollments</a>'
-            format: basic_html
-          plugin_id: text
+      footer: {  }
       defaults:
         footer: false
         style: false
@@ -383,8 +371,8 @@ display:
           entity_type: node
           entity_field: nid
           plugin_id: node_nid
-      link_display: view_enrollments
-      link_url: ''
+      link_display: custom_url
+      link_url: '/node/{{ raw_arguments.nid }}/enrollments'
       use_more: true
       use_more_always: true
       use_more_text: 'All enrollments'

@@ -3,12 +3,17 @@
 namespace Drupal\social_activity;
 
 use Drupal\comment\Entity\Comment;
+use Drupal\Core\Config\ConfigFactory;
 use Drupal\Core\Datetime\DateFormatter;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
+use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\Core\StringTranslation\StringTranslationTrait;
+use Drupal\Core\StreamWrapper\StreamWrapperManagerInterface;
 use Drupal\Core\StringTranslation\TranslatableMarkup;
 use Drupal\Core\Url;
 use Drupal\file\Entity\File;
+use Drupal\file\FileInterface;
+use Drupal\filter\FilterPluginManager;
 use Drupal\group\Entity\Group;
 use Drupal\image\Entity\ImageStyle;
 use Drupal\message\Entity\Message;
@@ -25,7 +30,6 @@ use Drupal\user\Entity\User;
  */
 class EmailTokenServices {
   use StringTranslationTrait;
-
   /**
    * Entity type manager services.
    *
@@ -48,6 +52,28 @@ class EmailTokenServices {
   protected GroupStatistics $groupStatistics;
 
   /**
+   * The module handler.
+   */
+  protected ModuleHandlerInterface $moduleHandler;
+
+  /**
+   * The stream wrapper manager.
+   */
+  protected StreamWrapperManagerInterface $streamWrapperManager;
+
+  /**
+   * The configfactory.
+   */
+  protected ConfigFactory $config;
+
+  /**
+   * The filter plugin manager service.
+   *
+   * @var \Drupal\filter\FilterPluginManager
+   */
+  protected $filterPluginManager;
+
+  /**
    * Constructs a EmailTokenServices object.
    *
    * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
@@ -56,15 +82,31 @@ class EmailTokenServices {
    *   DateFormatter object.
    * @param \Drupal\social_group\GroupStatistics $group_statistics
    *   GroupStatistics object.
+   * @param \Drupal\Core\Extension\ModuleHandlerInterface $module_handler
+   *   The module handler service.
+   * @param \Drupal\Core\StreamWrapper\StreamWrapperManagerInterface $stream_wrapper_manager
+   *   The stream wrapper manager.
+   * @param \Drupal\Core\Config\ConfigFactory $config
+   *   The config factory service.
+   * @param \Drupal\filter\FilterPluginManager $filter_plugin_manager
+   *   FilterPluginManager object.
    */
   public function __construct(
     EntityTypeManagerInterface $entity_type_manager,
     DateFormatter $date_formatter,
-    GroupStatistics $group_statistics
+    GroupStatistics $group_statistics,
+    ModuleHandlerInterface $module_handler,
+    StreamWrapperManagerInterface $stream_wrapper_manager,
+    ConfigFactory $config,
+    FilterPluginManager $filter_plugin_manager
   ) {
     $this->entityTypeManager = $entity_type_manager;
     $this->dateFormatter = $date_formatter;
     $this->groupStatistics = $group_statistics;
+    $this->moduleHandler = $module_handler;
+    $this->streamWrapperManager = $stream_wrapper_manager;
+    $this->config = $config;
+    $this->filterPluginManager = $filter_plugin_manager;
   }
 
   /**
@@ -77,6 +119,10 @@ class EmailTokenServices {
    *   An entity object. NULL if no matching entity is found.
    */
   public function getRelatedObject(Message $message) {
+    if ($message->get('field_message_related_object')->isEmpty()) {
+      return NULL;
+    }
+
     $target_type = $message->getFieldValue('field_message_related_object', 'target_type');
     $target_id = $message->getFieldValue('field_message_related_object', 'target_id');
 
@@ -99,10 +145,11 @@ class EmailTokenServices {
 
     if ($comment->hasField('field_comment_body') && !$comment->get('field_comment_body')->isEmpty()) {
       if ($summary = _social_comment_get_summary($comment->getFieldValue('field_comment_body', 'value'))) {
+        $processed_text = $this->processMentionsPreview($summary, $comment->language()->getId());
         // Prepare the preview information.
         $preview_info = [
           '#theme' => 'message_post_comment_preview',
-          '#summary' => $summary,
+          '#summary' => !empty($processed_text) ? $processed_text : $summary,
         ];
       }
     }
@@ -165,10 +212,11 @@ class EmailTokenServices {
     // Get the summary of the comment.
     if ($post->hasField('field_post') && !$post->get('field_post')->isEmpty()) {
       if ($summary = _social_comment_get_summary($post->getFieldValue('field_post', 'value'))) {
+        $processed_text = $this->processMentionsPreview($summary, $post->language()->getId());
         // Prepare the preview information.
         $preview_info = [
           '#theme' => 'message_post_comment_preview',
-          '#summary' => $summary,
+          '#summary' => !empty($processed_text) ? $processed_text : $summary,
         ];
       }
     }
@@ -193,19 +241,36 @@ class EmailTokenServices {
 
     /** @var \Drupal\profile\ProfileStorageInterface $profile_storage */
     $profile_storage = $this->entityTypeManager->getStorage('profile');
-    /** @var \Drupal\profile\Entity\Profile $profile */
+    /** @var \Drupal\profile\Entity\Profile|null $profile */
     $profile = $profile_storage->loadByUser($user, 'profile');
     // Add the profile image.
     /** @var \Drupal\image\Entity\ImageStyle $image_style */
     $image_style = ImageStyle::load('social_medium');
-    if (!empty($profile->field_profile_image->entity)) {
-      $image_url = $image_style->buildUrl($profile->field_profile_image->entity->getFileUri());
+
+    if (!$profile) {
+      return $preview_info;
+    }
+
+    /** @var \Drupal\file\FileInterface $image|null */
+    $image = NULL;
+    if ($profile->hasField('field_profile_image')) {
+      $image = !$profile->get('field_profile_image')->isEmpty() ? $profile->get('field_profile_image')->entity : NULL;
+    }
+
+    if (
+      $image instanceof FileInterface &&
+      !is_null($image->getFileUri()) &&
+      $this->streamWrapperManager->getScheme($image->getFileUri()) !== 'private'
+    ) {
+      $image_url = $image_style->buildUrl($image->getFileUri());
     }
     elseif ($default_image = social_profile_get_default_image()) {
       // Add default image.
       if (!empty($default_image['id'])) {
         $file = File::load($default_image['id']);
-        $image_url = $image_style->buildUrl($file->getFileUri());
+        // The function getFileUri can return string or null and buildUrl only,
+        // accept string, I added this validation to avoid warnings.
+        $image_url = ($file && $file->getFileUri()) ? $image_style->buildUrl($file->getFileUri()) : NULL;
       }
     }
     // Add the profile image.
@@ -216,6 +281,7 @@ class EmailTokenServices {
       '#profile_image' => $image_url ?? NULL,
       '#profile_function' => $profile->getFieldValue('field_profile_function', 'value'),
       '#profile_organization' => $profile->getFieldValue('field_profile_organization', 'value'),
+      '#profile_class' => $this->moduleHandler->moduleExists('lazy') ? $this->config->get('lazy.settings')->get('skipClass') : '',
     ];
 
     return $preview_info;
@@ -232,10 +298,13 @@ class EmailTokenServices {
    */
   public function getGroupPreview(Group $group) {
     // Add the group preview.
+    $label = $group->getGroupType()->label();
+    $group_type_label = $label instanceof TranslatableMarkup ? $label->render() : $label;
+    $group_type_label = $group_type_label ?? '';
     return [
       '#theme' => 'message_group_preview',
       '#group_title' => $group->label(),
-      '#group_type' => strtoupper($group->getGroupType()->label()),
+      '#group_type' => strtoupper($group_type_label),
       '#group_members' => $this->groupStatistics->getGroupMemberCount($group),
     ];
   }
@@ -257,6 +326,39 @@ class EmailTokenServices {
       '#link' => $url,
       '#text' => $text,
     ];
+  }
+
+  /**
+   * Process mentions in text, if the Social Mentions module exists.
+   *
+   * @param string $text
+   *   Text we need to process.
+   * @param string $language_id
+   *   Langcode of entity.
+   *
+   * @return \Drupal\filter\FilterProcessResult|string
+   *   Result with processed text.
+   */
+  public function processMentionsPreview(string $text, string $language_id) {
+    $result = '';
+    if ($this->moduleHandler->moduleExists('social_mentions')) {
+      /** @var \Drupal\filter\Plugin\FilterInterface $mentions_filter */
+      $mentions_filter = $this->filterPluginManager->createInstance(
+        'filter_mentions',
+         [
+           'settings' => [
+             'mentions_filter' => [
+               'ProfileMention' => 1,
+               'UserMention' => 1,
+             ],
+           ],
+         ],
+      );
+      $result = $mentions_filter->process(
+        $text, $language_id
+      );
+    }
+    return $result;
   }
 
 }

@@ -1,7 +1,7 @@
 services:
   # The main webserver contains our Open Social distribution.
   webserver:
-    image: kingdutch/social-docker-php:latest
+    image: ghcr.io/goalgorilla/ci-tugboat-php:8.1-apache
     default: true
     depends:
       - db
@@ -14,6 +14,7 @@ services:
       # individual steps are executed in separate shell instances.
       update: |
         set -e
+        git config --global --add safe.directory /var/www/html/profiles/contrib/social
         # Docroot for the PHP image points to /var/www/html so we set-up Open
         # Social one folder up so that our web files are in the html folder.
         cd $DOCROOT/..
@@ -31,8 +32,8 @@ services:
         cp $TUGBOAT_ROOT/.tugboat/composer.json .
         # Add the GitHub repository that the branch is in.
         composer config repositories.open_social git "https://github.com/$TUGBOAT_GITHUB_OWNER/$TUGBOAT_GITHUB_REPO"
-        # Install our preview version through private packagist from BitBucket.
-        composer require $COMPOSER_PROJECT_NAME:dev-$BRANCH_NAME#$TUGBOAT_PREVIEW_SHA
+        # Install our preview version through private packagist.
+        composer require --update-with-all-dependencies $COMPOSER_PROJECT_NAME:dev-$BRANCH_NAME#$TUGBOAT_PREVIEW_SHA
         # Use the tugboat-specific Drupal settings.
         cat $DOCROOT/sites/default/default.settings.php | \
           sed -z "s@#\n# if (file_exists(\$app_root . '/' . \$site_path . '/settings.local.php')) {\n#   include \$app_root . '/' . \$site_path . '/settings.local.php';\n# }@if (file_exists(__DIR__ . '/settings.local.php')) {\n  include __DIR__ . '/settings.local.php';\n}@" \
@@ -79,3 +80,12 @@ services:
   # A database for storage of Open Social data.
   db:
     image: tugboatqa/mariadb:latest
+  # SOLR is used to power Open Social's search
+  solr:
+    image: ghcr.io/goalgorilla/ci-tugboat-solr:8.11
+    commands:
+      init:
+        - su -s /bin/sh -c "/opt/solr/bin/solr create_core -c drupal -force" solr
+      build:
+        - cd "/var/solr/data/drupal" && rm -rf conf
+        - cd "/var/solr/data/drupal" && ln -snf "/solr-conf/conf" conf

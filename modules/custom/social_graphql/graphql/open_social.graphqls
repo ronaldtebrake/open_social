@@ -37,7 +37,12 @@ API from which all subscriptions must start.
 
 A real-time process must be implemented and deployed to support subscriptions.
 """
-type Subscription
+type Subscription {
+  """
+  Type Subscription can not be empty, so we add an empty field.
+  """
+  _empty: String
+}
 
 ################################################################################
 #                                Basic Types                                   #
@@ -311,7 +316,12 @@ interface Connection {
 """
 The base mutation type.
 """
-type Mutation
+type Mutation {
+  """
+  Type Mutation can not be empty, so we add an empty field.
+  """
+  _empty: String
+}
 
 """
 A violation indicates an error in the GraphQL query or other incorrect
@@ -324,4 +334,28 @@ The base GraphQL Response class
 """
 interface Response {
   errors: [Violation]
+}
+
+"""
+An optional string.
+
+Used on input fields that require discerning between not-updating the field value and setting the field to NULL.
+"""
+# This type should only be used as a last resort in case you're building system-to-system APIs where a partial update is important.
+# You most likely want a simple nullable scalar, or to implement multiple more focused mutations.
+input OptionalString {
+  value: String
+}
+
+"""
+An optional phone number.
+
+Must be a valid phone number in the format `[+country-prefix]<number>`.
+
+Used on input fields that require discerning between not-updating the field value and setting the field to NULL.
+"""
+# This type should only be used as a last resort in case you're building system-to-system APIs where a partial update is important.
+# You most likely want a simple nullable scalar, or to implement multiple more focused mutations.
+input OptionalPhoneNumber {
+  value: PhoneNumber
 }

@@ -46,15 +46,8 @@ class QueryCommentsTest extends SocialGraphQLTestBase {
     'views',
     'group',
     'variationcache',
+    'flexible_permissions',
   ];
-
-
-  /**
-   * The list of comments.
-   *
-   * @var \Drupal\comment\CommentInterface[]
-   */
-  private $comments = [];
 
   /**
    * {@inheritdoc}

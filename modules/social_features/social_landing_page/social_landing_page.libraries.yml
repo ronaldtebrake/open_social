@@ -4,6 +4,8 @@ admin:
       css/social_landing_page.admin.css: {}
   js:
     js/social_landing_page--accordion.js: {}
+  dependencies:
+    - core/once
 
 section.introduction:
   css:
@@ -38,6 +40,10 @@ accordion:
       css/social_landing_page.section.accordion.css: {}
   js:
     js/social_landing_page--accordion.js: {}
+  dependencies:
+    - core/drupal
+    - core/jquery
+    - core/once
 
 activity_overview:
   css:

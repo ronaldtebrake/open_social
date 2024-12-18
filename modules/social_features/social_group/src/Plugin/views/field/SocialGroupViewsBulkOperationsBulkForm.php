@@ -2,11 +2,19 @@
 
 namespace Drupal\social_group\Plugin\views\field;
 
+use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\Core\Render\Element;
+use Drupal\Core\Session\AccountInterface;
+use Drupal\Core\TempStore\PrivateTempStoreFactory;
 use Drupal\Core\Url;
 use Drupal\group\Entity\GroupInterface;
 use Drupal\views_bulk_operations\Plugin\views\field\ViewsBulkOperationsBulkForm;
+use Drupal\views_bulk_operations\Service\ViewsBulkOperationsActionManager;
+use Drupal\views_bulk_operations\Service\ViewsBulkOperationsActionProcessorInterface;
+use Drupal\views_bulk_operations\Service\ViewsBulkOperationsViewDataInterface;
+use Symfony\Component\DependencyInjection\ContainerInterface;
+use Symfony\Component\HttpFoundation\RequestStack;
 
 /**
  * Defines the Groups Views Bulk Operations field plugin.
@@ -18,9 +26,75 @@ use Drupal\views_bulk_operations\Plugin\views\field\ViewsBulkOperationsBulkForm;
 class SocialGroupViewsBulkOperationsBulkForm extends ViewsBulkOperationsBulkForm {
 
   /**
+   * The config factory.
+   *
+   * @var \Drupal\Core\Config\ConfigFactoryInterface
+   */
+  protected $configFactory;
+
+  /**
+   * Constructs a new SocialGroupViewsBulkOperationsBulkForm object.
+   *
+   * @param array $configuration
+   *   A configuration array containing information about the plugin instance.
+   * @param string $plugin_id
+   *   The plugin ID for the plugin instance.
+   * @param mixed $plugin_definition
+   *   The plugin implementation definition.
+   * @param \Drupal\views_bulk_operations\Service\ViewsBulkOperationsViewDataInterface $viewData
+   *   The VBO View Data provider service.
+   * @param \Drupal\views_bulk_operations\Service\ViewsBulkOperationsActionManager $actionManager
+   *   Extended action manager object.
+   * @param \Drupal\views_bulk_operations\Service\ViewsBulkOperationsActionProcessorInterface $actionProcessor
+   *   Views Bulk Operations action processor.
+   * @param \Drupal\Core\TempStore\PrivateTempStoreFactory $tempStoreFactory
+   *   User private temporary storage factory.
+   * @param \Drupal\Core\Session\AccountInterface $currentUser
+   *   The current user object.
+   * @param \Symfony\Component\HttpFoundation\RequestStack $requestStack
+   *   The request stack.
+   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
+   *   The config factory.
+   */
+  public function __construct(
+    array $configuration,
+    $plugin_id,
+    $plugin_definition,
+    ViewsBulkOperationsViewDataInterface $viewData,
+    ViewsBulkOperationsActionManager $actionManager,
+    ViewsBulkOperationsActionProcessorInterface $actionProcessor,
+    PrivateTempStoreFactory $tempStoreFactory,
+    AccountInterface $currentUser,
+    RequestStack $requestStack,
+    ConfigFactoryInterface $config_factory
+  ) {
+    parent::__construct($configuration, $plugin_id, $plugin_definition, $viewData, $actionManager, $actionProcessor, $tempStoreFactory, $currentUser, $requestStack);
+
+    $this->configFactory = $config_factory;
+  }
+
+  /**
    * {@inheritdoc}
    */
-  public function getBulkOptions() {
+  public static function create(ContainerInterface $container, array $configuration, $plugin_id, $plugin_definition) {
+    return new static(
+      $configuration,
+      $plugin_id,
+      $plugin_definition,
+      $container->get('views_bulk_operations.data'),
+      $container->get('plugin.manager.views_bulk_operations_action'),
+      $container->get('views_bulk_operations.processor'),
+      $container->get('tempstore.private'),
+      $container->get('current_user'),
+      $container->get('request_stack'),
+      $container->get('config.factory')
+    );
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function getBulkOptions(): array {
     $bulk_options = parent::getBulkOptions();
 
     if ($this->view->id() !== 'group_manage_members') {
@@ -39,6 +113,20 @@ class SocialGroupViewsBulkOperationsBulkForm extends ViewsBulkOperationsBulkForm
       switch ($selected_action_data['action_id']) {
         case 'social_group_members_export_member_action':
         case 'social_group_delete_group_content_action':
+          // Check if we have enabled the export.
+          if ($selected_action_data['action_id'] == "social_group_members_export_member_action") {
+            $social_user_settings = $this->configFactory->get('social_user_export.settings');
+            $social_user_settings_plugins = array_filter($social_user_settings->get('plugins'));
+
+            if (!$this->currentUser()->hasPermission('administer social_user_export') && empty($social_user_settings_plugins)) {
+              unset($this->options['selected_actions'][$key]);
+              unset($bulk_options[$key]);
+              unset($this->bulkOptions[$key]);
+              break;
+            }
+
+          }
+
           $bulk_options[$key] = $this->t('<b>@action</b> selected members', [
             '@action' => $real_label,
           ]);
@@ -67,7 +155,7 @@ class SocialGroupViewsBulkOperationsBulkForm extends ViewsBulkOperationsBulkForm
   /**
    * {@inheritdoc}
    */
-  public function viewsForm(array &$form, FormStateInterface $form_state) {
+  public function viewsForm(array &$form, FormStateInterface $form_state): void {
     $this->view->setExposedInput(['status' => TRUE]);
 
     parent::viewsForm($form, $form_state);
@@ -85,21 +173,47 @@ class SocialGroupViewsBulkOperationsBulkForm extends ViewsBulkOperationsBulkForm
         // If not we clear it right away.
         // Since we don't want to mess with cached date.
         $this->deleteTempstoreData($this->view->id(), $this->view->current_display);
+
+        // Calculate bulk form keys.
+        $bulk_form_keys = [];
+        if (!empty($this->view->result)) {
+          $base_field = $this->view->storage->get('base_field');
+          foreach ($this->view->result as $row_index => $row) {
+            if ($entity = $this->getEntity($row)) {
+              $bulk_form_keys[$row_index] = self::calculateEntityBulkFormKey(
+                $entity,
+                $row->{$base_field}
+              );
+            }
+          }
+        }
         // Reset initial values.
-        $this->updateTempstoreData();
+        if (
+          empty($form_state->getUserInput()['op']) &&
+          !empty($bulk_form_keys)
+        ) {
+          $this->updateTempstoreData($bulk_form_keys);
+        }
+        else {
+          $this->updateTempstoreData();
+        }
+
         // Initialize it again.
         $tempstoreData = $this->getTempstoreData($this->view->id(), $this->view->current_display);
       }
       // Add the Group ID to the data.
       $tempstoreData['group_id'] = $group->id();
+      // Add the group bundle to the data.
+      $tempstoreData['group_type'] = $group->bundle();
+      $this->setTempstoreData($tempstoreData, $this->view->id(), $this->view->current_display);
     }
 
-    $this->setTempstoreData($tempstoreData, $this->view->id(), $this->view->current_display);
-
     // Reorder the form array.
-    $multipage = $form['header'][$this->options['id']]['multipage'];
-    unset($form['header'][$this->options['id']]['multipage']);
-    $form['header'][$this->options['id']]['multipage'] = $multipage;
+    if (!empty($form['header'])) {
+      $multipage = $form['header'][$this->options['id']]['multipage'];
+      unset($form['header'][$this->options['id']]['multipage']);
+      $form['header'][$this->options['id']]['multipage'] = $multipage;
+    }
 
     // Render proper classes for the header in VBO form.
     $wrapper = &$form['header'][$this->options['id']];
@@ -111,32 +225,35 @@ class SocialGroupViewsBulkOperationsBulkForm extends ViewsBulkOperationsBulkForm
     // Add some JS for altering titles and switches.
     $form['#attached']['library'][] = 'social_group/views_bulk_operations.frontUi';
 
-    // Render select all results checkbox.
+    // Render select all result checkboxes.
     if (!empty($wrapper['select_all'])) {
+      $total_results = $this->tempStoreData['total_results'] ?? 0;
       $wrapper['select_all']['#title'] = $this->t('Select / unselect all @count members across all the pages', [
-        '@count' => $this->tempStoreData['total_results'] ? ' ' . $this->tempStoreData['total_results'] : '',
+        '@count' => ' ' . $total_results,
       ]);
       // Styling attributes for the select box.
       $form['header'][$this->options['id']]['select_all']['#attributes']['class'][] = 'form-no-label';
       $form['header'][$this->options['id']]['select_all']['#attributes']['class'][] = 'checkbox';
-    }
 
-    /** @var \Drupal\Core\StringTranslation\TranslatableMarkup $title */
-    $title = $wrapper['multipage']['#title'];
-    $arguments = $title->getArguments();
-    $count = empty($arguments['%count']) ? 0 : $arguments['%count'];
+      // Initialize the count.
+      $count = 0;
+      if (isset($this->tempStoreData['list'])) {
+        // Set the count for selected enrollees.
+        $count = empty($this->tempStoreData['exclude_mode']) ? \count($this->tempStoreData['list']) : $this->tempStoreData['total_results'] - \count($this->tempStoreData['list']);
+      }
 
-    $title = $this->formatPlural($count, '<b><em class="placeholder">@count</em> Member</b> is selected', '<b><em class="placeholder">@count</em> Members</b> are selected');
-    $wrapper['multipage']['#title'] = [
-      '#type' => 'html_tag',
-      '#tag' => 'div',
-      '#value' => $title,
-      '#attributes' => [
-        'class' => [
-          'vbo-info-list-wrapper',
+      $title = $this->formatPlural($count, '<b><em class="placeholder">@count</em> Member</b> is selected', '<b><em class="placeholder">@count</em> Members</b> are selected');
+      $wrapper['multipage']['#title'] = [
+        '#type' => 'html_tag',
+        '#tag' => 'div',
+        '#value' => $title,
+        '#attributes' => [
+          'class' => [
+            'vbo-info-list-wrapper',
+          ],
         ],
-      ],
-    ];
+      ];
+    }
 
     // Add selector so the JS of VBO applies correctly.
     $wrapper['multipage']['#attributes']['class'][] = 'vbo-multipage-selector';
@@ -169,22 +286,25 @@ class SocialGroupViewsBulkOperationsBulkForm extends ViewsBulkOperationsBulkForm
 
     // Actions are not a select list but a dropbutton list.
     $actions = &$wrapper['actions'];
-    $actions['#theme'] = 'links__dropbutton__operations__actions';
-    $actions['#label'] = $this->t('Actions');
-    $actions['#type'] = 'dropbutton';
+    if (!empty($actions) && !empty($wrapper['action'])) {
+      $actions['#theme'] = 'links__dropbutton__operations__actions';
+      $actions['#label'] = $this->t('Actions');
+      $actions['#type'] = 'dropbutton';
 
-    $items = [];
-    foreach ($wrapper['action']['#options'] as $key => $value) {
-      if ($key !== '' && array_key_exists($key, $this->bulkOptions)) {
-        $items[] = [
-          '#type' => 'submit',
-          '#value' => $value,
-        ];
+      $items = [];
+      foreach ($wrapper['action']['#options'] as $key => $value) {
+        if ($key !== '' && array_key_exists($key, $this->bulkOptions)) {
+          $items[] = [
+            '#type' => 'submit',
+            '#value' => $value,
+          ];
+        }
       }
+
+      // Add our links to the dropdown buttondrop type.
+      $actions['#links'] = $items;
     }
 
-    // Add our links to the dropdown buttondrop type.
-    $actions['#links'] = $items;
     // Remove the Views select list and submit button.
     $form['actions']['#type'] = 'hidden';
     $form['header']['social_views_bulk_operations_bulk_form_group']['action']['#access'] = FALSE;
@@ -235,7 +355,7 @@ class SocialGroupViewsBulkOperationsBulkForm extends ViewsBulkOperationsBulkForm
   /**
    * {@inheritdoc}
    */
-  public function viewsFormSubmit(array &$form, FormStateInterface $form_state) {
+  public function viewsFormSubmit(array &$form, FormStateInterface $form_state): void {
     parent::viewsFormSubmit($form, $form_state);
 
     if ($form_state->get('step') === 'views_form_views_form' && $this->view->id() === 'group_manage_members') {
@@ -245,8 +365,10 @@ class SocialGroupViewsBulkOperationsBulkForm extends ViewsBulkOperationsBulkForm
       if ($url->getRouteName() === 'views_bulk_operations.execute_configurable') {
         $parameters = $url->getRouteParameters();
 
-        if (empty($parameters['group'])) {
-          $group = _social_group_get_current_group();
+        if (
+          empty($parameters['group']) &&
+          ($group = _social_group_get_current_group()) !== NULL
+        ) {
           $parameters['group'] = $group->id();
         }
 

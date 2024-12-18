@@ -38,7 +38,7 @@ display:
       exposed_form:
         type: bef
         options:
-          submit_button: Apply
+          submit_button: Filter
           reset_button: true
           reset_button_label: Reset
           exposed_sorts_label: Sort
@@ -283,7 +283,7 @@ display:
         search_api_language:
           id: search_api_language
           table: search_api_index_social_content
-          field: search_api_language
+          field: language_with_fallback
           relationship: none
           group_type: group
           admin_label: ''

@@ -29,7 +29,7 @@ class ExportEnrolments extends ExportUser {
       $entity = $this->getAccount($entity);
     }
 
-    parent::executeMultiple($entities);
+    return parent::executeMultiple($entities);
   }
 
   /**
@@ -55,8 +55,7 @@ class ExportEnrolments extends ExportUser {
    * @see social_user_export_file_download()
    */
   protected function generateFilePath() : string {
-    $hash = md5(microtime(TRUE));
-    return 'export-enrollments-' . substr($hash, 20, 12) . '.csv';
+    return 'export-enrollments-' . bin2hex(random_bytes(8)) . '.csv';
   }
 
   /**

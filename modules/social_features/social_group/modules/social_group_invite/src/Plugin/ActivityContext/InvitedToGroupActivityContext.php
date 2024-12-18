@@ -3,7 +3,7 @@
 namespace Drupal\social_group_invite\Plugin\ActivityContext;
 
 use Drupal\activity_creator\Plugin\ActivityContextBase;
-use Drupal\ginvite\Plugin\GroupContentEnabler\GroupInvitation;
+use Drupal\ginvite\Plugin\Group\Relation\GroupInvitation;
 use Drupal\Core\Entity\EntityInterface;
 
 /**
@@ -19,7 +19,7 @@ class InvitedToGroupActivityContext extends ActivityContextBase {
   /**
    * {@inheritdoc}
    */
-  public function getRecipients(array $data, $last_uid, $limit) {
+  public function getRecipients(array $data, int $last_id, int $limit): array {
     $recipients = [];
 
     if (!empty($data['related_object'])) {
@@ -27,7 +27,7 @@ class InvitedToGroupActivityContext extends ActivityContextBase {
       $referenced_entity = $this->activityFactory->getActivityRelatedEntity($data);
       $storage = $this->entityTypeManager->getStorage('group_content');
 
-      /** @var \Drupal\group\Entity\GroupContentInterface $group_content */
+      /** @var \Drupal\group\Entity\GroupRelationshipInterface $group_content */
       $group_content = $storage->load($referenced_entity['target_id']);
 
       // Check if the user (entity_id) has a pending invite for the group.
@@ -52,7 +52,7 @@ class InvitedToGroupActivityContext extends ActivityContextBase {
   /**
    * {@inheritdoc}
    */
-  public function isValidEntity(EntityInterface $entity) {
+  public function isValidEntity(EntityInterface $entity): bool {
     /** @var \Drupal\Core\Entity\EntityInterface $entity */
     return $entity->getEntityTypeId() === 'group_content';
   }

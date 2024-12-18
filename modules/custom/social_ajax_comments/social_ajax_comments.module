@@ -14,7 +14,6 @@ use Drupal\ajax_comments\Utility;
 use Drupal\comment\CommentInterface;
 use Drupal\node\Entity\Node;
 use Drupal\node\NodeInterface;
-use Drupal\social_comment\SocialCommentViewBuilder;
 use Drupal\social_post\Entity\Post;
 use Drupal\social_post\Entity\PostInterface;
 
@@ -36,7 +35,7 @@ function social_ajax_comments_entity_display_build_alter(&$build, $context) {
       $field_settings_helper = \Drupal::service('ajax_comments.field_settings_helper');
       $field_config = $build[$field_name]['#items']->getFieldDefinition();
       $field_formatter = $field_settings_helper->getFieldFormatter($context['display'], $field['#field_name'], $field_config, $context['display']->getMode());
-      if (!empty($field_formatter) && $field_settings_helper->isEnabled($field_formatter)) {
+      if ($field_settings_helper->isEnabled($field_formatter)) {
         // Check if this ID is being generated in response to an Ajax request.
         if (Utility::isAjaxRequest(\Drupal::request())) {
           // Note that setting ajax as TRUE on Html here also fixes issue
@@ -112,9 +111,16 @@ function social_ajax_comments_comment_links_alter(array &$links, CommentInterfac
     $wrapper_id = Html::getId(
       $commented_entity->getEntityTypeId() . '-' . $commented_entity->bundle() . '-' . 'field_post_comments' . '-' . $commented_entity->id()
     );
-    $links['comment']['#links']['comment-edit']['attributes']['data-wrapper-html-id'] = $wrapper_id;
-    $links['comment']['#links']['comment-unpublish']['attributes']['data-wrapper-html-id'] = $wrapper_id;
-    $links['comment']['#links']['comment-delete']['attributes']['data-wrapper-html-id'] = $wrapper_id;
+
+    if (!empty($links['comment']['#links']['comment-edit'])) {
+      $links['comment']['#links']['comment-edit']['attributes']['data-wrapper-html-id'] = $wrapper_id;
+    }
+    if (!empty($links['comment']['#links']['comment-unpublish'])) {
+      $links['comment']['#links']['comment-unpublish']['attributes']['data-wrapper-html-id'] = $wrapper_id;
+    }
+    if (!empty($links['comment']['#links']['comment-delete'])) {
+      $links['comment']['#links']['comment-delete']['attributes']['data-wrapper-html-id'] = $wrapper_id;
+    }
   }
 }
 
@@ -193,7 +199,13 @@ function social_ajax_comments_ajax_render_alter(array &$data) {
         preg_match('/^#([a-z\-]+)$/', $item['selector'], $matches)
       ) {
         $content = &$item['data'];
-        $content = substr($content, strrpos(substr($content, 0, strpos($content, $matches[1])), '<'));
+
+        $strpos_matches = strpos($content, $matches[1]);
+        $strpos_substrng = strrpos(substr($content, 0, (int) $strpos_matches), '<');
+
+        if ($strpos_matches !== FALSE && $strpos_substrng !== FALSE) {
+          $content = substr($content, $strpos_substrng);
+        }
         return;
       }
     }
@@ -205,8 +217,7 @@ function social_ajax_comments_ajax_render_alter(array &$data) {
  */
 function social_ajax_comments_preprocess_pager(&$variables) {
   if (
-    isset($variables['pager']['#tags']) &&
-    in_array(SocialCommentViewBuilder::PAGER_TAG, $variables['pager']['#tags']) &&
+    !empty($variables['pager']['#ajaxify']) &&
     ($items = &$variables['items'])
   ) {
     _social_ajax_comments_pager($items);
@@ -228,4 +239,40 @@ function _social_ajax_comments_pager(array &$items) {
       $item['attributes'] = $attributes;
     }
   }
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter().
+ */
+function social_ajax_comments_form_comment_form_alter(array &$form, FormStateInterface $form_state, string $form_id) :void {
+  // The comment below is copied from "ajax_comments" module version
+  // "8.x-1.0-beta4". Comment is located at
+  // "ajax_comments/src/Form/AjaxCommentsForm.php" in "buildForm()" method.
+  // In case the logic of contrib module will be changed in the future,
+  // the logic below should follow accordingly.
+  //
+  // Ajax replies to other comments should happen on the canonical entity page
+  // (note this functionality has not been ported to D8, yet).
+  // If the user is on the standalone comment reply page or comment edit page,
+  // it means JavaScript is disabled or the ajax functionality is not working.
+  // Do not proceed with the form alter.
+  if (in_array(\Drupal::routeMatch()->getRouteName(), ['comment.reply', 'entity.comment.edit_form'])) {
+    unset($form['actions']['submit']['#ajax']);
+  }
+}
+
+/**
+ * Implements hook_batch_alter().
+ */
+function social_ajax_comments_batch_alter(array &$batch): void {
+  /** @var \Drupal\Core\Form\FormStateInterface|null $form_state */
+  $form_state = $batch['form_state'] ?? NULL;
+
+  if (empty($form_state) || $form_state->getValue('form_id') != 'comment_comment_delete_form' || !empty($batch['batch_redirect'])) {
+    return;
+  }
+
+  $form_state->disableRedirect(FALSE);
+  $batch['batch_redirect'] = $form_state->getRedirect();
+  $form_state->disableRedirect();
 }

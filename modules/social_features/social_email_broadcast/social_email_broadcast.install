@@ -1,0 +1,47 @@
+<?php
+
+/**
+ * @file
+ * Install, update and uninstall functions for the module.
+ */
+
+/**
+ * Implements hook_schema().
+ */
+function social_email_broadcast_schema(): array {
+  // This table contains users' attitude to receiving emails from a platform.
+  // The email could be sent from different places (from events - to enrollees,
+  // from groups - to group members, etc.) and usually performed by VBO feature.
+  // This table contains information regarding users' preferences to receive
+  // or not receive such emails.
+  $schema['user_email_send'] = [
+    'fields' => [
+      'uid' => [
+        'description' => 'The {user}.uid of user.',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ],
+      'name' => [
+        'description' => 'The name of bulk mail.',
+        'type' => 'varchar',
+        'length' => 32,
+        'not null' => TRUE,
+        'default' => '',
+      ],
+      'frequency' => [
+        'description' => 'The frequency the emails should be sent.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => 'immediately',
+      ],
+    ],
+    'indexes' => [
+      'ues_uid' => ['uid'],
+      'ues_name' => ['name'],
+    ],
+  ];
+
+  return $schema;
+}

@@ -10,9 +10,9 @@ use Drupal\Core\Cache\RefinableCacheableDependencyInterface;
 use Drupal\Core\Entity\Display\EntityViewDisplayInterface;
 use Drupal\Core\Entity\EntityInterface;
 use Drupal\Core\Form\FormStateInterface;
+use Drupal\Core\Link;
 use Drupal\Core\Session\AccountInterface;
 use Drupal\Core\StringTranslation\TranslatableMarkup;
-use Drupal\Core\Url;
 use Drupal\node\NodeInterface;
 use Drupal\social_album\Form\SocialAlbumImageForm;
 use Drupal\social_album\Form\SocialAlbumPostForm;
@@ -66,8 +66,10 @@ function social_album_entity_view(array &$build, EntityInterface $entity, Entity
  */
 function social_album_social_user_account_header_create_links($context) {
   // We require a user for this link with the permission to create albums.
+  $status = \Drupal::config('social_album.settings')->get('status');
+
   if (empty($context['user']) || !($context['user'] instanceof AccountInterface)
-    || !$context['user']->hasPermission('create album content')) {
+    || !$context['user']->hasPermission('create album content') || !$status) {
     return [];
   }
   // Lets add the new create album button to the + dropdown.
@@ -77,9 +79,8 @@ function social_album_social_user_account_header_create_links($context) {
       '#attributes' => [
         'title' => new TranslatableMarkup('Create New Album'),
       ],
-      '#title' => new TranslatableMarkup('New Album'),
       '#weight' => 400,
-    ] + Url::fromRoute('node.add', ['node_type' => 'album'])->toRenderArray(),
+    ] + Link::createFromRoute((new TranslatableMarkup('New Album')), 'node.add', ['node_type' => 'album'])->toRenderable(),
   ];
 }
 
@@ -117,7 +118,7 @@ function social_album_preprocess_node(&$variables) {
 
   if (
     $node->bundle() === 'album' &&
-    $variables['view_mode'] === 'teaser' &&
+    in_array($variables['view_mode'], ['teaser', 'activity_comment', 'featured']) &&
     views_get_view_result('albums', 'embed_album_cover', $node->id())
   ) {
     $variables['node_image'] = views_embed_view('albums', 'embed_album_cover', $node->id());
@@ -141,6 +142,10 @@ function social_album_preprocess_views_view(&$variables) {
 
     if (isset($library[$view->current_display])) {
       $variables['#attached']['library'][] = $library[$view->current_display];
+    }
+
+    if ($view->current_display == 'embed_album_cover') {
+      $variables['#attached']['library'][] = 'social_album/social_album_teaser';
     }
   }
 }
@@ -184,9 +189,9 @@ function social_album_post_presave(EntityInterface $entity) {
 }
 
 /**
- * Implements hook_ENTITY_TYPE_insert().
+ * Helper function to invalidate tags.
  */
-function social_album_post_insert(EntityInterface $entity) {
+function _social_album_invalidate_tags(EntityInterface $entity): void {
   /** @var \Drupal\social_post\Entity\PostInterface $entity */
   if ($entity->bundle() === 'photo' && !$entity->field_album->isEmpty()) {
     \Drupal::service('cache_tags.invalidator')->invalidateTags([
@@ -194,6 +199,20 @@ function social_album_post_insert(EntityInterface $entity) {
       'user:' . $entity->getOwnerId(),
     ]);
   }
+}
+
+/**
+ * Implements hook_ENTITY_TYPE_insert().
+ */
+function social_album_post_insert(EntityInterface $entity) {
+  _social_album_invalidate_tags($entity);
+}
+
+/**
+ * Implements hook_ENTITY_TYPE_update().
+ */
+function social_album_post_update(EntityInterface $entity) {
+  _social_album_invalidate_tags($entity);
 }
 
 /**
@@ -319,7 +338,7 @@ function social_album_form_comment_form_alter(&$form, FormStateInterface $form_s
     /** @var \Drupal\social_post\Entity\PostInterface $post */
     $post = \Drupal::routeMatch()->getParameter('entity');
 
-    if (!$post->field_album->isEmpty()) {
+    if ($post->hasField('field_album') && !$post->field_album->isEmpty()) {
       /** @var \Drupal\node\NodeInterface $album */
       $album = $post->field_album->entity;
 
@@ -344,13 +363,20 @@ function social_album_form_post_form_alter(&$form, FormStateInterface $form_stat
     }
   }
   elseif (isset($form['field_album'])) {
-    $form['field_album']['#states'] = [
-      'visible' => [
-        ':input[name="field_post_image[0][fids]"]' => [
-          'filled' => TRUE,
+    // Hide album select field when feature is disabled on the image post form.
+    $status = \Drupal::config('social_album.settings')->get('status');
+    if (!$status) {
+      unset($form['field_album']);
+    }
+    else {
+      $form['field_album']['#states'] = [
+        'visible' => [
+          ':input[name="field_post_image[0][fids]"]' => [
+            'filled' => TRUE,
+          ],
         ],
-      ],
-    ];
+      ];
+    }
   }
 }
 
@@ -498,7 +524,9 @@ function _social_album_post_submit(array $form, FormStateInterface $form_state) 
 
     $node->save();
 
-    \Drupal::service('social_group.set_groups_for_node_service')->addGroupContent($node, $post->field_recipient_group->entity);
+    /** @var \Drupal\group\Entity\Group $group */
+    $group = $post->field_recipient_group->entity;
+    \Drupal::service('social_group.set_groups_for_node_service')->addGroupRelationship($node, $group);
 
     $post->set('field_album', $node->id());
   }
@@ -520,17 +548,21 @@ function social_album_social_user_account_header_account_links(array $context) {
     return [];
   }
 
+  $link = Link::createFromRoute(
+    (new TranslatableMarkup('My albums')),
+    'view.albums.page_albums_overview',
+    ['user' => $context['user']->id()]
+  );
+
   return [
     'my_albums' => [
       '#type' => 'link',
       '#attributes' => [
         'title' => new TranslatableMarkup('View my albums'),
       ],
-      '#title' => new TranslatableMarkup('My albums'),
       '#weight' => 550,
-    ] + Url::fromRoute('view.albums.page_albums_overview', [
-      'user' => $context['user']->id(),
-    ])->toRenderArray(),
+      '#access' => $link->getUrl()->access(),
+    ] + $link->toRenderable(),
   ];
 }
 
@@ -540,4 +572,42 @@ function social_album_social_user_account_header_account_links(array $context) {
 function social_album_social_core_compatible_content_forms_alter(&$compatible_content_type_forms) {
   $compatible_content_type_forms[] = 'node_album_form';
   $compatible_content_type_forms[] = 'node_album_edit_form';
+}
+
+/**
+ * Implements hook_node_links_alter().
+ */
+function social_album_node_links_alter(array &$links, NodeInterface $node, array &$context): void {
+  // Show "Edit" link on full album page for users with edit access.
+  if ($context['view_mode'] === 'full' && $node->getType() === 'album') {
+    $account = \Drupal::currentUser();
+    if ($node->access('update', $account)) {
+      if (!isset($links['moderation'])) {
+        $links['moderation'] = [
+          '#theme' => 'links__node__moderation',
+          '#attributes' => ['class' => ['links', 'inline']],
+        ];
+      }
+
+      $links['moderation']['#links']['edit'] = [
+        'title' => t('Edit'),
+        'url' => $node->toUrl('edit-form'),
+      ];
+    }
+  }
+}
+
+/**
+ * Hide "Create Album" link when the feature is disabled.
+ */
+function social_album_preprocess_node_add_list(array &$variables): void {
+  if (!empty($variables['content'])) {
+    $status = \Drupal::config('social_album.settings')->get('status');
+    foreach ($variables['content'] as $type) {
+      if ($type->id() === 'album' && !$status) {
+        unset($variables['types'][$type->id()]);
+      }
+    }
+    $variables['#cache']['tags'][] = 'node_add_list';
+  }
 }

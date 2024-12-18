@@ -196,6 +196,21 @@ display:
           entity_type: group
           entity_field: created
           plugin_id: date
+        label:
+          id: label
+          table: groups_field_data
+          field: label
+          relationship: none
+          group_type: group
+          admin_label: ''
+          entity_type: group
+          entity_field: label
+          plugin_id: standard
+          order: ASC
+          expose:
+            label: ''
+            field_identifier: ''
+          exposed: false
       title: 'All groups'
       header: {  }
       footer: {  }
@@ -251,6 +266,7 @@ display:
       contexts:
         - 'languages:language_content'
         - 'languages:language_interface'
+        - user
         - user.permissions
       tags: {  }
   page_all_groups:
@@ -263,36 +279,31 @@ display:
       path: all-groups
       display_description: ''
       filters:
-        type:
-          id: type
+        default_langcode:
+          id: default_langcode
           table: groups_field_data
-          field: type
+          field: default_langcode
           relationship: none
           group_type: group
           admin_label: ''
-          operator: in
-          value: {  }
+          operator: '='
+          value: '1'
           group: 1
-          exposed: true
+          exposed: false
           expose:
-            operator_id: type_op
-            label: 'Group type'
+            operator_id: ''
+            label: ''
             description: ''
             use_operator: false
-            operator: type_op
-            identifier: type
+            operator: ''
+            operator_limit_selection: false
+            operator_list: { }
+            identifier: ''
             required: false
             remember: false
             multiple: false
             remember_roles:
               authenticated: authenticated
-              anonymous: '0'
-              administrator: '0'
-              contentmanager: '0'
-              sitemanager: '0'
-            reduce: false
-            operator_limit_selection: false
-            operator_list: {  }
           is_grouped: false
           group_info:
             label: ''
@@ -303,14 +314,50 @@ display:
             multiple: false
             remember: false
             default_group: All
-            default_group_multiple: {  }
-            group_items: {  }
+            default_group_multiple: { }
+            group_items: { }
           entity_type: group
-          entity_field: type
-          plugin_id: bundle
+          entity_field: default_langcode
+          plugin_id: boolean
+        field_group_allowed_join_method_value:
+          id: field_group_allowed_join_method_value
+          table: group__field_group_allowed_join_method
+          field: field_group_allowed_join_method_value
+          relationship: none
+          group_type: group
+          admin_label: ''
+          operator: or
+          value: { }
+          group: 1
+          exposed: true
+          expose:
+            operator_id: field_group_allowed_join_method_value_op
+            label: 'Join method'
+            description: ''
+            use_operator: false
+            operator: field_group_allowed_join_method_value_op
+            identifier: field_group_allowed_join_method
+            required: false
+            remember: false
+            multiple: false
+            remember_roles:
+              authenticated: authenticated
+          is_grouped: false
+          group_info:
+            label: ''
+            description: ''
+            identifier: field_group_allowed_join_method
+            optional: true
+            widget: select
+            multiple: false
+            remember: false
+            default_group: All
+            default_group_multiple: { }
+            group_items: { }
+          plugin_id: list_field
       defaults:
-        filters: true
-        filter_groups: true
+        filters: false
+        filter_groups: false
       filter_groups:
         operator: AND
         groups:
@@ -324,5 +371,6 @@ display:
         - 'languages:language_interface'
         - url
         - url.query_args
+        - user
         - user.permissions
       tags: {  }

@@ -10,6 +10,7 @@
  */
 
 use Drupal\activity_creator\ActivityInterface;
+use Drupal\activity_creator\Service\ActivityCreatorBatchActivityDeletion;
 use Drupal\Core\Config\Entity\ConfigEntityInterface;
 use Drupal\message\Entity\Message;
 use Drupal\Core\Cache\Cache;
@@ -20,6 +21,10 @@ use Drupal\search_api\Task\TaskInterface;
 
 /**
  * Activity statuses.
+ *
+ * We disable the constant naming convention because it would be a breaking
+ * change for our notification system.
+ * @phpcs:disable Drupal.Semantics.ConstantName.ConstConstantStart
  */
 const ACTIVITY_STATUS_RECEIVED = 1;
 const ACTIVITY_STATUS_SEEN = 2;
@@ -63,45 +68,50 @@ function activity_creator_field_activity_destinations_allowed_values(): array {
  * Implements hook_ENTITY_TYPE_insert().
  */
 function activity_creator_message_insert(Message $entity) {
-  if ($entity) {
-    // @todo Move all this logic to services (also in Queue).
-    $mid = $entity->id();
-    $message_template_id = $entity->getTemplate()->id();
-    $actor = $entity->getOwner()->id();
+  // @todo Move all this logic to services (also in Queue).
+  $mid = $entity->id();
+  $message_template_id = $entity->getTemplate()->id();
+  $actor = $entity->getOwner()->id();
 
-    // If one field of field_message_context, field_message_destination or
-    // field_message_related_object is empty, don't create activities.
-    if (
-      $entity->get('field_message_context')->isEmpty() ||
-      $entity->get('field_message_destination')->isEmpty() ||
-      $entity->get('field_message_related_object')->isEmpty()
-    ) {
-      return;
-    }
+  // Messages that are not part of the activity system may not have the fields
+  // we need. Similarly for our activity system we always ensure they are all
+  // filled thus if one of field_message_context, field_message_destination or
+  // field_message_related_object is empty, don't create activities.
+  if (
+    !$entity->hasField('field_message_context') ||
+    $entity->get('field_message_context')->isEmpty() ||
+    !$entity->hasField('field_message_destination') ||
+    $entity->get('field_message_destination')->isEmpty() ||
+    !$entity->hasField('field_message_related_object') ||
+    $entity->get('field_message_related_object')->isEmpty()
+  ) {
+    return;
+  }
 
-    $context = $entity->get('field_message_context')->getValue();
-    $destinations = $entity->get('field_message_destination')->getValue();
-    $related_object = $entity->get('field_message_related_object')->getValue();
+  $context = $entity->get('field_message_context')->getValue();
+  $destinations = $entity->get('field_message_destination')->getValue();
+  $related_object = $entity->get('field_message_related_object')->getValue();
 
-    $data = [
-      'mid' => $mid,
-      'message_template' => $message_template_id,
-      'actor' => $actor,
-      'context' => $context[0]['value'],
-      'destination' => $destinations,
-      'related_object' => $related_object,
-      'last_uid' => 0,
-      'status' => NULL,
-    ];
+  $data = [
+    'mid' => $mid,
+    'message_template' => $message_template_id,
+    'actor' => $actor,
+    'context' => $context[0]['value'],
+    'destination' => $destinations,
+    'related_object' => $related_object,
+    'last_uid' => 0,
+    'status' => NULL,
+  ];
 
-    $message_template = $entity->getTemplate();
+  $message_template = $entity->getTemplate();
 
-    $activity_create_direct = $message_template->getThirdPartySetting('activity_logger', 'activity_create_direct', NULL);
+  $activity_create_direct = $message_template->getThirdPartySetting('activity_logger', 'activity_create_direct', NULL);
 
-    if ($activity_create_direct) {
+  if ($activity_create_direct) {
 
-      $context_plugin_manager = \Drupal::service('plugin.manager.activity_context.processor');
+    $context_plugin_manager = \Drupal::service('plugin.manager.activity_context.processor');
 
+    if ($context_plugin_manager->hasDefinition($data['context'])) {
       /** @var \Drupal\activity_creator\Plugin\ActivityContextBase $plugin */
       $plugin = $context_plugin_manager->createInstance($data['context']);
       $recipients = $plugin->getRecipients($data, $data['last_uid'], 0);
@@ -151,10 +161,10 @@ function activity_creator_message_insert(Message $entity) {
         $activity_factory->createActivities($activity_creator_data);
       }
     }
-    else {
-      $queue = \Drupal::queue('activity_creator_logger');
-      $queue->createItem($data);
-    }
+  }
+  else {
+    $queue = \Drupal::queue('activity_creator_logger');
+    $queue->createItem($data);
   }
 }
 
@@ -284,7 +294,7 @@ function activity_creator_entity_view(array &$build, EntityInterface $entity, En
     $message = Message::load($entity->get('field_activity_message')->target_id);
     if ($message instanceof Message) {
       // Get the text in the users language.
-      $output = \Drupal::service('activity_creator.activity_factory')->getMessageText($message);
+      $output = \Drupal::service('activity_creator.activity_factory')->getMessageText($message, \Drupal::languageManager()->getCurrentLanguage()->getId());
       // Replace the old text with the correct one.
       $build['field_activity_output_text'][0]['#text'] = $output[0];
     }
@@ -350,12 +360,7 @@ function _activity_creator_activity_for_entity_updater($action, EntityInterface 
     }
     elseif ($action === 'delete') {
       // Delete all activities.
-      $activity_storage = \Drupal::entityTypeManager()->getStorage('activity');
-      $activities = $activity_storage->loadMultiple($ids);
-      $activity_storage->delete($activities);
-
-      // Remove entries from activity_notification_table.
-      $activity_notification_service->deleteNotificationsbyIds($ids);
+      ActivityCreatorBatchActivityDeletion::bulkDeleteActivities($ids);
     }
   }
 }
@@ -396,8 +401,10 @@ function activity_creator_empty_queue() {
         // Must contain items.
         if ($worker->numberOfItems() > 0) {
           while ($item = $worker->claimItem()) {
-            $queue_worker->processItem($item->data);
-            $worker->deleteItem($item);
+            if (is_object($item) && !empty($item->data)) {
+              $queue_worker->processItem($item->data);
+              $worker->deleteItem($item);
+            }
           }
         }
       }

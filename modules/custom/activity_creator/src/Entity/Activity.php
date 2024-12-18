@@ -2,12 +2,14 @@
 
 namespace Drupal\activity_creator\Entity;
 
+use Drupal\Core\Config\Entity\ConfigEntityStorage;
 use Drupal\Core\Entity\EntityStorageInterface;
 use Drupal\Core\Field\BaseFieldDefinition;
 use Drupal\Core\Entity\ContentEntityBase;
 use Drupal\Core\Entity\EntityChangedTrait;
 use Drupal\Core\Entity\EntityTypeInterface;
 use Drupal\activity_creator\ActivityInterface;
+use Drupal\Core\Url;
 use Drupal\flag\Entity\Flagging;
 use Drupal\user\UserInterface;
 use Drupal\node\NodeInterface;
@@ -201,15 +203,23 @@ class Activity extends ContentEntityBase implements ActivityInterface {
    *   Returns NULL or Entity object.
    */
   public function getRelatedEntity() {
-
     $related_object = $this->get('field_activity_entity')->getValue();
     if (!empty($related_object)) {
       $target_type = $related_object['0']['target_type'];
       $target_id = $related_object['0']['target_id'];
       $entity_storage = $this->entityTypeManager()->getStorage($target_type);
-      /** @var  \Drupal\Core\Entity\EntityInterface $entity */
-      $entity = $entity_storage->load($target_id);
-      return $entity;
+      if ($entity_storage instanceof ConfigEntityStorage) {
+        $entity = $entity_storage->loadByProperties([
+          'unique_id' => $target_id,
+          'status' => 1,
+        ]);
+        $entity = reset($entity);
+      }
+      else {
+        /** @var  \Drupal\Core\Entity\EntityInterface $entity */
+        $entity = $entity_storage->load($target_id);
+      }
+      return empty($entity) ? NULL : $entity;
     }
     return NULL;
 
@@ -219,10 +229,13 @@ class Activity extends ContentEntityBase implements ActivityInterface {
    * Get related entity url.
    *
    * @return \Drupal\Core\Url|string
-   *   Returns empty string or URL object of related entity canonical url.
+   *   URL object of related entity canonical url or NULL.
+   *
+   * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
+   * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
+   * @throws \Drupal\Core\Entity\EntityMalformedException
    */
-  public function getRelatedEntityUrl() {
-    $link = "";
+  public function getRelatedEntityUrl(): string|Url {
     $related_object = $this->get('field_activity_entity')->getValue();
 
     if (!empty($related_object)) {
@@ -238,7 +251,7 @@ class Activity extends ContentEntityBase implements ActivityInterface {
         }
       }
       elseif ($target_type === 'group_content') {
-        /** @var \Drupal\group\Entity\GroupContent $group_content */
+        /** @var \Drupal\group\Entity\GroupRelationship $group_content */
         if ($group_content = \Drupal::service('entity_type.manager')->getStorage($target_type)->load($target_id)) {
           $target_type = $group_content->getEntity()->getEntityTypeId();
           $target_id = $group_content->getEntity()->id();
@@ -259,6 +272,9 @@ class Activity extends ContentEntityBase implements ActivityInterface {
       }
       elseif ($target_type === 'flagging') {
         $flagging = Flagging::load($target_id);
+        if (!$flagging) {
+          return '';
+        }
         $target_type = $flagging->getFlaggableType();
         $target_id = $flagging->getFlaggableId();
       }
@@ -272,7 +288,8 @@ class Activity extends ContentEntityBase implements ActivityInterface {
         $link = $entity->toUrl('canonical');
       }
     }
-    return $link;
+
+    return $link ?? '';
   }
 
   /**
@@ -281,11 +298,9 @@ class Activity extends ContentEntityBase implements ActivityInterface {
   public function getDestinations() {
     $values = [];
     $field_activity_destinations = $this->field_activity_destinations;
-    if (isset($field_activity_destinations)) {
-      $destinations = $field_activity_destinations->getValue();
-      foreach ($destinations as $destination) {
-        $values[] = $destination['value'];
-      }
+    $destinations = $field_activity_destinations->getValue();
+    foreach ($destinations as $destination) {
+      $values[] = $destination['value'];
     }
     return $values;
   }
@@ -298,27 +313,21 @@ class Activity extends ContentEntityBase implements ActivityInterface {
    * @todo Split it to two separate functions.
    */
   public function getRecipient() {
-    $value = NULL;
-
     $field_activity_recipient_user = $this->field_activity_recipient_user;
-    if (isset($field_activity_recipient_user)) {
-      $recipient_user = $field_activity_recipient_user->getValue();
-      if (!empty($recipient_user)) {
-        $recipient_user['0']['target_type'] = 'user';
-        return $recipient_user;
-      }
+    $recipient_user = $field_activity_recipient_user->getValue();
+    if (!empty($recipient_user)) {
+      $recipient_user['0']['target_type'] = 'user';
+      return $recipient_user;
     }
 
     $field_activity_recipient_group = $this->field_activity_recipient_group;
-    if (isset($field_activity_recipient_group)) {
-      $recipient_group = $field_activity_recipient_group->getValue();
-      if (!empty($recipient_group)) {
-        $recipient_group['0']['target_type'] = 'group';
-        return $recipient_group;
-      }
+    $recipient_group = $field_activity_recipient_group->getValue();
+    if (!empty($recipient_group)) {
+      $recipient_group['0']['target_type'] = 'group';
+      return $recipient_group;
     }
 
-    return $value;
+    return NULL;
   }
 
 }
